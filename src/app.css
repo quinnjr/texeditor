@@ -1,0 +1,124 @@
+@import "tailwindcss";
+
+/* Dark mode is driven by a `.dark` class on <html> rather than the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---- Theme tokens -------------------------------------------------------
+   Light scheme is the default; `.dark` on <html> swaps the values.
+   Consumed either via `var(--app-bg)` or Tailwind utilities such as
+   `bg-surface` / `text-fg` thanks to the @theme mappings below.          */
+:root {
+  --app-bg: #f8f8f7;
+  --app-surface: #ffffff;
+  --app-surface-alt: #f1f1ef;
+  --app-border: #d9d9d5;
+  --app-fg: #1b1b19;
+  --app-fg-muted: #6b6b66;
+  --app-accent: #2f6feb;
+  --app-accent-fg: #ffffff;
+  --app-danger: #c0392b;
+  --app-ok: #2e7d4f;
+  --app-font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --app-font-mono: ui-monospace, "JetBrains Mono", "Fira Code", "SFMono-Regular", Menlo, Consolas, monospace;
+  --app-font-serif: "Source Serif 4", Georgia, "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+  color-scheme: light;
+}
+
+.dark {
+  --app-bg: #17181a;
+  --app-surface: #1f2023;
+  --app-surface-alt: #26282c;
+  --app-border: #35383d;
+  --app-fg: #e8e8e6;
+  --app-fg-muted: #9a9ca0;
+  --app-accent: #6ea0ff;
+  --app-accent-fg: #10131a;
+  --app-danger: #ff6b5e;
+  --app-ok: #5fd08a;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--app-bg);
+  --color-surface: var(--app-surface);
+  --color-surface-alt: var(--app-surface-alt);
+  --color-edge: var(--app-border);
+  --color-fg: var(--app-fg);
+  --color-fg-muted: var(--app-fg-muted);
+  --color-accent: var(--app-accent);
+  --color-accent-fg: var(--app-accent-fg);
+  --color-danger: var(--app-danger);
+  --color-ok: var(--app-ok);
+  --font-sans: var(--app-font-sans);
+  --font-mono: var(--app-font-mono);
+  --font-serif: var(--app-font-serif);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--app-bg);
+  color: var(--app-fg);
+  font-family: var(--app-font-sans);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+select,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 1px;
+}
+
+/* Quiet scrollbars that stay in step with the theme, for the panels that
+   scroll internally. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--app-border) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--app-border);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--app-fg-muted);
+  background-clip: padding-box;
+}
