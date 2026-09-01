@@ -1,6 +1,7 @@
 <!-- Top toolbar. OWNER: shell agent. -->
 <script lang="ts">
   import { doc, ui, build } from './stores.svelte';
+  import ModeToggle from './ModeToggle.svelte';
 
   const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform ?? navigator.userAgent);
   const mod = isMac ? '⌘' : 'Ctrl';
@@ -97,26 +98,7 @@
 
   <div class="mx-1 h-5 w-px bg-edge"></div>
 
-  <div class="flex items-center gap-0.5 rounded-md bg-surface-alt p-0.5 text-xs">
-    <button
-      type="button"
-      class="rounded px-2 py-1 transition-colors {ui.mode === 'live' ? 'bg-surface text-fg shadow-sm' : 'text-fg-muted hover:text-fg'}"
-      onclick={() => setMode('live')}
-      aria-pressed={ui.mode === 'live'}
-      title="Live preview ({mod}+\\)"
-    >
-      Live
-    </button>
-    <button
-      type="button"
-      class="rounded px-2 py-1 transition-colors {ui.mode === 'pdf' ? 'bg-surface text-fg shadow-sm' : 'text-fg-muted hover:text-fg'}"
-      onclick={() => setMode('pdf')}
-      aria-pressed={ui.mode === 'pdf'}
-      title="Compiled PDF ({mod}+\\)"
-    >
-      PDF
-    </button>
-  </div>
+  <ModeToggle mode={ui.mode} {setMode} size="md" wrapperClass="bg-surface-alt" />
 
   <button
     type="button"

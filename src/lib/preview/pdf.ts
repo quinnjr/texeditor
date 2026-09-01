@@ -7,21 +7,48 @@
 // rasterise the pages ourselves with pdf.js, which behaves identically on every
 // platform.
 
-import {
-  GlobalWorkerOptions,
-  getDocument,
-  RenderingCancelledException,
-  type PDFDocumentProxy,
-  type RenderTask
-} from 'pdfjs-dist';
+import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
-GlobalWorkerOptions.workerSrc = workerUrl;
+type PdfjsModule = typeof import('pdfjs-dist');
+
+// pdfjs-dist is ~450 KB of parsed JS, and most sessions never leave the live
+// HTML preview — so it must not be in the boot bundle. Only the *types* are
+// imported statically (erased at compile time); the module itself is pulled in
+// by `loadPdfjs()` on the first render, which Vite emits as its own chunk.
+// `workerUrl` is a `?url` import: it resolves to a plain string and emits the
+// worker as an asset, so it costs nothing at boot.
+let pdfjsPromise: Promise<PdfjsModule> | null = null;
+
+function loadPdfjs(): Promise<PdfjsModule> {
+  if (!pdfjsPromise) {
+    const pending = import('pdfjs-dist').then((mod) => {
+      mod.GlobalWorkerOptions.workerSrc = workerUrl;
+      return mod;
+    });
+    // Don't cache a rejection forever: a chunk that failed to load (offline,
+    // transient 404) should be retried on the next compile rather than
+    // poisoning PDF mode for the rest of the session.
+    pending.catch(() => {
+      if (pdfjsPromise === pending) pdfjsPromise = null;
+    });
+    pdfjsPromise = pending;
+  }
+  return pdfjsPromise;
+}
 
 // Mirrored out of node_modules into public/pdfjs by the `pdfjs-vendor-assets`
 // plugin in vite.config.ts. Trailing slashes are required by pdf.js.
+//
+// All four are needed: CMaps decode CJK/encoded text, standard_fonts supplies
+// the base-14 font programs, wasm/ holds the JBIG2 + JPEG2000 image decoders
+// and the QCMS colour engine, and iccs/ holds the predefined ICC profile pdf.js
+// falls back on. Leaving wasm/icc unset makes documents that need them fail to
+// render (or silently drop images) instead of falling back cleanly.
 const CMAP_URL = '/pdfjs/cmaps/';
 const STANDARD_FONT_URL = '/pdfjs/standard_fonts/';
+const WASM_URL = '/pdfjs/wasm/';
+const ICC_URL = '/pdfjs/iccs/';
 
 /** Cap the backing-store multiplier: past 2x the memory cost buys nothing. */
 const MAX_DPR = 2;
@@ -35,17 +62,26 @@ export interface DrawOptions {
 
 export interface PdfHandle {
   readonly pageCount: number;
+  /**
+   * Width in PDF points of page 1 at scale 1 — i.e. the document's natural
+   * width. The UI needs it to turn the fit-to-width multiplier back into a
+   * true "% of actual size" the user can reason about.
+   */
+  readonly naturalWidth: number;
   /** (Re)rasterise every page into the container. Safe to call concurrently. */
   draw(options: DrawOptions): Promise<void>;
   /** Cancel in-flight work, empty the container and release the document. */
   destroy(): Promise<void>;
 }
 
-function isCancellation(err: unknown): boolean {
-  return (
-    err instanceof RenderingCancelledException ||
-    (err instanceof Error && err.name === 'RenderingCancelledException')
-  );
+/** Scale pdf.js will actually use for a page of width `naturalWidth`. */
+export function effectiveScale(
+  naturalWidth: number,
+  availableWidth: number,
+  zoom: number
+): number {
+  const fit = availableWidth > 0 && naturalWidth > 0 ? availableWidth / naturalWidth : 1;
+  return Math.max(0.1, fit * zoom);
 }
 
 /**
@@ -53,18 +89,47 @@ function isCancellation(err: unknown): boolean {
  * a handle that rasterises it into `container`.
  */
 export async function loadPdf(url: string, container: HTMLElement): Promise<PdfHandle> {
-  const loadingTask = getDocument({
+  const pdfjs = await loadPdfjs();
+
+  const loadingTask = pdfjs.getDocument({
     url,
     cMapUrl: CMAP_URL,
     cMapPacked: true,
-    standardFontDataUrl: STANDARD_FONT_URL
+    standardFontDataUrl: STANDARD_FONT_URL,
+    wasmUrl: WASM_URL,
+    iccUrl: ICC_URL
   });
 
-  const pdf: PDFDocumentProxy = await loadingTask.promise;
+  let pdf: PDFDocumentProxy;
+  let naturalWidth: number;
+  try {
+    pdf = await loadingTask.promise;
+    const first = await pdf.getPage(1);
+    naturalWidth = first.getViewport({ scale: 1 }).width;
+    first.cleanup();
+  } catch (err) {
+    // getDocument() has already spawned a worker by the time the promise
+    // settles, and a rejection does *not* reap it — without this every failed
+    // load (corrupt output, password-protected file, aborted fetch) leaks a
+    // Worker plus its transport for the life of the window.
+    try {
+      await loadingTask.destroy();
+    } catch {
+      // Worker never came up, or is already gone.
+    }
+    throw err;
+  }
 
   let generation = 0;
   let inFlight: RenderTask[] = [];
   let destroyed = false;
+
+  function isCancellation(err: unknown): boolean {
+    return (
+      err instanceof pdfjs.RenderingCancelledException ||
+      (err instanceof Error && err.name === 'RenderingCancelledException')
+    );
+  }
 
   function cancelInFlight() {
     for (const task of inFlight) {
@@ -113,8 +178,7 @@ export async function loadPdf(url: string, container: HTMLElement): Promise<PdfH
       }
 
       const unscaled = page.getViewport({ scale: 1 });
-      const fit = options.availableWidth > 0 ? options.availableWidth / unscaled.width : 1;
-      const scale = Math.max(0.1, fit * options.zoom);
+      const scale = effectiveScale(unscaled.width, options.availableWidth, options.zoom);
       const viewport = page.getViewport({ scale });
 
       const canvas = canvases[i];
@@ -162,6 +226,9 @@ export async function loadPdf(url: string, container: HTMLElement): Promise<PdfH
   return {
     get pageCount() {
       return pdf.numPages;
+    },
+    get naturalWidth() {
+      return naturalWidth;
     },
     draw,
     destroy

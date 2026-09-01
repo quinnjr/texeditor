@@ -3,7 +3,7 @@
   import { onDestroy } from 'svelte';
   import { doc, ui, build } from './stores.svelte';
   import { renderLatex } from './preview/render';
-  import { loadPdf, type PdfHandle } from './preview/pdf';
+  import { effectiveScale, loadPdf, type PdfHandle } from './preview/pdf';
 
   let renderedHtml = $state('<div class="tex-doc-root"></div>');
   let mathCount = $state(0);
@@ -47,11 +47,47 @@
     const el = contentEl;
     if (!el) return;
     queueMicrotask(() => {
-      const text = el.textContent ?? '';
-      const words = text.trim().split(/\s+/).filter(Boolean);
+      const words = visibleText(el).trim().split(/\s+/).filter(Boolean);
       wordCount = words.length;
     });
   });
+
+  /**
+   * Text a reader actually sees, for the word count.
+   *
+   * `textContent` is not that: KaTeX renders every formula twice — a visually
+   * hidden MathML twin for screen readers (`.katex-mathml`, whose
+   * `<annotation encoding="application/x-tex">` node carries the *raw TeX
+   * source*, backslashes and all) and an `aria-hidden` pile of glyph spans that
+   * is the part you see. Reading `textContent` therefore counted the source of
+   * every formula plus its rendered glyphs as "words", which on a math-heavy
+   * document inflated the count several-fold and made it meaningless.
+   *
+   * Math is dropped entirely rather than glyph-counted: the visible spans
+   * tokenise into fragments ("x", "2", "+") that are not words in any useful
+   * sense, and the footer already reports formulas separately as math blocks.
+   * So the number means "words of prose", which is what someone writing a paper
+   * is asking for.
+   *
+   * Works on a clone so the live DOM the user is looking at is never touched.
+   */
+  const HIDDEN_FROM_READERS =
+    '.katex, .katex-mathml, annotation, math, script, style, [aria-hidden="true"], [hidden]';
+
+  /**
+   * Tags that start a new visual line. `textContent` concatenates with no
+   * separator, so "…positive time.</p><p>Here…" would otherwise read as the
+   * single token "time.Here" and lose a word at every block boundary.
+   */
+  const BLOCK_LEVEL =
+    'p, div, li, dt, dd, tr, td, th, h1, h2, h3, h4, h5, h6, blockquote, pre, figure, figcaption, table, ul, ol, dl, br, hr';
+
+  function visibleText(root: HTMLElement): string {
+    const clone = root.cloneNode(true) as HTMLElement;
+    for (const el of clone.querySelectorAll(HIDDEN_FROM_READERS)) el.remove();
+    for (const el of clone.querySelectorAll(BLOCK_LEVEL)) el.before(document.createTextNode(' '));
+    return clone.textContent ?? '';
+  }
 
   // ---- PDF mode ---------------------------------------------------------
   // Rendered to <canvas> via pdf.js rather than handed to an <iframe>: the app
@@ -64,6 +100,8 @@
   let pdfScrollEl: HTMLElement | undefined = $state();
   let zoom = $state(1);
   let pageCount = $state(0);
+  /** Width of page 1 in PDF points, for the true-scale zoom readout. */
+  let naturalWidth = $state(0);
   let pdfLoading = $state(false);
   let pdfError = $state<string | null>(null);
   let availableWidth = $state(0);
@@ -76,6 +114,7 @@
     const current = handle;
     handle = null;
     pageCount = 0;
+    naturalWidth = 0;
     if (current) await current.destroy();
   }
 
@@ -145,6 +184,7 @@
         }
         handle = next;
         pageCount = next.pageCount;
+        naturalWidth = next.naturalWidth;
       } catch (err) {
         if (token !== loadToken) return;
         pdfError = err instanceof Error ? err.message : String(err);
@@ -153,6 +193,19 @@
       }
     })();
   });
+
+  // What the zoom control displays: the scale pdf.js is actually rendering at,
+  // as a percentage of the PDF's natural size.
+  //
+  // `zoom` is a multiplier on *fit-to-width*, so showing `zoom * 100` claimed
+  // "100%" while a Letter page stretched across a wide pane was really being
+  // drawn at ~260% — the one number in a PDF viewer everybody reads as "actual
+  // size". Deriving it from the same formula pdf.ts renders with keeps the
+  // readout true, and 100% now means 100%. (Page 1's width stands in for the
+  // document: mixed-size pages are vanishingly rare in LaTeX output.)
+  // Before the document is measured (naturalWidth 0) effectiveScale() falls back
+  // to the raw multiplier, so the control still reads sensibly while loading.
+  const displayScale = $derived(effectiveScale(naturalWidth, availableWidth, zoom));
 
   // Rasterise (and re-rasterise) at the current width and zoom. Reads only
   // pageCount / availableWidth / zoom — never writes them — so it settles.
@@ -166,10 +219,19 @@
     if (!current) return;
 
     let cancelled = false;
-    current.draw({ availableWidth: width, zoom: z }).catch((err) => {
-      if (cancelled) return;
-      pdfError = err instanceof Error ? err.message : String(err);
-    });
+    current.draw({ availableWidth: width, zoom: z }).then(
+      () => {
+        // A redraw that succeeds clears whatever the last one complained about.
+        // Without this a single transient failure (a cancelled render, a missing
+        // font file) pinned the red banner to the panel for the rest of the
+        // session, over pages that were rendering perfectly well.
+        if (!cancelled) pdfError = null;
+      },
+      (err) => {
+        if (cancelled) return;
+        pdfError = err instanceof Error ? err.message : String(err);
+      }
+    );
     return () => {
       cancelled = true;
     };
@@ -241,7 +303,8 @@
           <button
             class="min-w-[3.5rem] rounded px-2 py-0.5 tabular-nums text-fg-muted hover:bg-surface-alt hover:text-fg"
             onclick={zoomReset}
-            title="Reset zoom to fit width">{Math.round(zoom * 100)}%</button
+            title="Rendering at {Math.round(displayScale * 100)}% of actual size — click to fit the page to the panel width"
+            >{Math.round(displayScale * 100)}%</button
           >
           <button
             class="rounded px-2 py-0.5 text-fg-muted hover:bg-surface-alt hover:text-fg disabled:opacity-40"
@@ -499,6 +562,21 @@
     color: var(--app-accent);
     text-decoration: underline;
     text-underline-offset: 2px;
+  }
+  /* A dangerous link target (e.g. a non-http(s) scheme) that was refused a
+     real <a href>. This must read as MORE cautionary than a normal .tex-link,
+     not less — plain unstyled text would let a blocked link look plainer
+     (and so safer) than a working one. */
+  :global(.tex-link-blocked) {
+    color: var(--app-danger);
+    text-decoration: underline dashed;
+    text-decoration-color: var(--app-danger);
+    text-underline-offset: 2px;
+    cursor: not-allowed;
+  }
+  :global(.tex-link-blocked)::before {
+    content: '\26D4\FE0E\0020';
+    font-size: 0.85em;
   }
   :global(.tex-ref) {
     color: var(--app-accent);

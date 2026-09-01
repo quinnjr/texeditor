@@ -6,6 +6,10 @@ const THEME_KEY = 'texviewer.theme';
 const SPLIT_KEY = 'texviewer.splitPct';
 const MODE_KEY = 'texviewer.mode';
 
+/** Divider drag range for the editor/preview split, as a percentage of the pane width. */
+export const SPLIT_MIN = 15;
+export const SPLIT_MAX = 85;
+
 export const SAMPLE_TEX = `\\documentclass[11pt]{article}
 \\usepackage[margin=1in]{geometry}
 \\usepackage{amsmath}
@@ -129,7 +133,7 @@ export function loadPrefs() {
     const rawSplit = localStorage.getItem(SPLIT_KEY);
     if (rawSplit !== null) {
       const n = Number(rawSplit);
-      if (Number.isFinite(n) && n >= 15 && n <= 85) {
+      if (Number.isFinite(n) && n >= SPLIT_MIN && n <= SPLIT_MAX) {
         ui.splitPct = n;
       }
     }

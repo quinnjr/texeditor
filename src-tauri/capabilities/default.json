@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability set for the main window.",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "dialog:default",
@@ -10,9 +12,6 @@
     "dialog:allow-save",
     "dialog:allow-message",
     "dialog:allow-ask",
-    "core:window:allow-destroy",
-    "fs:default",
-    "fs:allow-read-text-file",
-    "fs:allow-write-text-file"
+    "core:window:allow-destroy"
   ]
 }

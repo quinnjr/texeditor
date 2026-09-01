@@ -14,6 +14,7 @@ import {
   type StreamParser
 } from '@codemirror/language';
 import type { StringStream } from '@codemirror/language';
+import type { Text } from '@codemirror/state';
 
 /** Commands that introduce a sectioning heading, mapped to a heading level. */
 const SECTION_COMMANDS: Record<string, number> = {
@@ -200,6 +201,35 @@ const BEGIN_RE = /\\begin\{([a-zA-Z*]+)\}/g;
 const END_RE = /\\end\{([a-zA-Z*]+)\}/g;
 
 /**
+ * Cap on how much of the document one fold lookup will scan forward before
+ * giving up. Without this, asking about the line holding `\begin{document}` —
+ * on screen in nearly every document, since it sits near the top — walked
+ * every remaining line to find its `\end{document}`, and the fold gutter
+ * asks on every doc-changing transaction. That made every keystroke anywhere
+ * in a large document cost O(document length), no matter how far the edit
+ * was from `\begin{document}` itself.
+ *
+ * A capped scan degrades gracefully: past the cap, that one environment is
+ * reported as not foldable rather than paying an unbounded cost to prove it
+ * is. `MAX_FOLD_SCAN_CHARS` is generous enough to cover any document this
+ * editor is comfortable holding in memory in the first place.
+ */
+const MAX_FOLD_SCAN_CHARS = 200_000;
+
+/**
+ * Per-document-version memo of `latexFoldService` results, keyed by the
+ * position right after the opening `\begin{name}{`. `foldService` is asked
+ * about every foldable line in the viewport on every update — including
+ * viewport/selection changes that don't touch `state.doc` at all — so this
+ * turns repeat questions about the same environment in the same document
+ * version into a cache hit instead of a repeat scan. Keyed by the `Text`
+ * value itself (stable per document version, structurally shared across
+ * edits elsewhere in the document) rather than kept alive explicitly: once
+ * that version is no longer referenced anywhere, the entry can be collected.
+ */
+const foldCache = new WeakMap<Text, Map<number, { from: number; to: number } | null>>();
+
+/**
  * Text-based folding for \begin{env} ... \end{env} blocks. Scans forward
  * from `lineStart` tracking a stack of open environments so that nested and
  * same-named environments fold correctly, independent of the tokenizer.
@@ -213,15 +243,25 @@ const latexFoldService = foldService.of((state, lineStart, lineEnd) => {
   const envName = openMatch[1];
   const openEnd = lineStart + openMatch.index + openMatch[0].length;
 
+  let perDoc = foldCache.get(state.doc);
+  if (!perDoc) {
+    perDoc = new Map();
+    foldCache.set(state.doc, perDoc);
+  }
+  const cached = perDoc.get(openEnd);
+  if (cached !== undefined) return cached;
+
   let depth = 1;
   let pos = openEnd;
+  let scanned = 0;
   const doc = state.doc;
   let lineNo = doc.lineAt(pos).number;
 
-  while (lineNo <= doc.lines) {
+  while (lineNo <= doc.lines && scanned <= MAX_FOLD_SCAN_CHARS) {
     const line = doc.line(lineNo);
     const from = Math.max(pos, line.from) - line.from;
     const text = line.text.slice(from);
+    scanned += text.length;
 
     BEGIN_RE.lastIndex = 0;
     END_RE.lastIndex = 0;
@@ -238,7 +278,9 @@ const latexFoldService = foldService.of((state, lineStart, lineEnd) => {
       if (depth === 0) {
         const endPos = line.from + from + hit.index;
         if (endPos <= openEnd) continue;
-        return { from: openEnd, to: endPos };
+        const range = { from: openEnd, to: endPos };
+        perDoc.set(openEnd, range);
+        return range;
       }
     }
 
@@ -246,6 +288,10 @@ const latexFoldService = foldService.of((state, lineStart, lineEnd) => {
     pos = line.to + 1;
   }
 
+  // Either genuinely unterminated, or the cap was hit first — either way,
+  // not worth re-scanning for on every subsequent query this document
+  // version sees.
+  perDoc.set(openEnd, null);
   return null;
 });
 

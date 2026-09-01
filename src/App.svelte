@@ -4,7 +4,18 @@
   import Toolbar from './lib/Toolbar.svelte';
   import Editor from './lib/Editor.svelte';
   import Preview from './lib/Preview.svelte';
-  import { doc, ui, build, setTheme, loadPrefs, persistSplitPct, persistMode } from './lib/stores.svelte';
+  import ModeToggle from './lib/ModeToggle.svelte';
+  import {
+    doc,
+    ui,
+    build,
+    setTheme,
+    loadPrefs,
+    persistSplitPct,
+    persistMode,
+    SPLIT_MIN,
+    SPLIT_MAX
+  } from './lib/stores.svelte';
   import {
     compileLatex,
     openFileDialog,
@@ -16,9 +27,6 @@
     DesktopOnlyError,
     type LatexEngine
   } from './lib/tauri';
-
-  const SPLIT_MIN = 15;
-  const SPLIT_MAX = 85;
 
   // Restore persisted theme / split / mode *synchronously during init*, before
   // any $effect is registered. Doing this from onMount would be too late: user
@@ -38,17 +46,28 @@
   let dividerEl: HTMLElement | undefined = $state();
   let dragging = $state(false);
 
-  function clampSplit(pct: number) {
-    return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct));
+  // Identifies the document currently in the buffer. Every async command that
+  // outlives its own call (compile, save) captures this before awaiting and
+  // re-checks it afterwards: the webview stays live across an IPC round-trip,
+  // so by the time a result lands the buffer may hold a *different* document
+  // and applying the result would attach one document's output to another.
+  // Bumped by newDocumentGeneration() wherever the buffer is replaced wholesale.
+  let docGeneration = 0;
+  function newDocumentGeneration() {
+    docGeneration += 1;
   }
 
-  function base64ToBlob(base64: string, mime: string): Blob {
-    const byteChars = atob(base64);
-    const bytes = new Uint8Array(byteChars.length);
-    for (let i = 0; i < byteChars.length; i++) {
-      bytes[i] = byteChars.charCodeAt(i);
-    }
-    return new Blob([bytes], { type: mime });
+  // Open and Save both hand control to a native dialog that can stay up
+  // indefinitely. Ctrl+S / Ctrl+O are bound to a raw keydown handler, which
+  // fires on auto-repeat (~30 times a second while held), so without these
+  // guards a held key stacks one dialog per repeat — each writing the buffer to
+  // whatever path it returned. This is the same protection `build.compiling`
+  // already gives compile().
+  let saving = false;
+  let opening = false;
+
+  function clampSplit(pct: number) {
+    return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, pct));
   }
 
   /** Drop the current PDF object URL, if any, so the blob can be collected. */
@@ -74,11 +93,23 @@
     build.error = null;
     build.log = '';
     ui.status = 'Compiling…';
+    // A compile can run for many seconds; the document can be replaced (Open)
+    // while it does. Anything this run produces belongs to `generation`, so
+    // none of it may be applied once the buffer has moved on — otherwise the
+    // old document's PDF gets shown, in PDF mode, next to the new source and
+    // labelled a success.
+    const generation = docGeneration;
     try {
-      const result = await compileLatex(doc.source, engine);
+      // `doc.path` names the currently-open document (null for an untitled
+      // buffer) so the engine can resolve \input, \includegraphics and
+      // \bibliography relative to it — see compile_latex's `doc_path` param.
+      const result = await compileLatex(doc.source, engine, doc.path);
+      // Checked before the blob/object URL is built, so a discarded result
+      // never allocates a URL that nothing would revoke.
+      if (generation !== docGeneration) return;
       build.log = result.log;
-      if (result.ok && result.pdfBase64) {
-        const blob = base64ToBlob(result.pdfBase64, 'application/pdf');
+      if (result.ok && result.pdfBytes) {
+        const blob = new Blob([result.pdfBytes], { type: 'application/pdf' });
         const url = URL.createObjectURL(blob);
         releasePdf();
         build.pdfUrl = url;
@@ -101,10 +132,15 @@
         ui.status = 'Compile failed';
       }
     } catch (e) {
+      // A failure that belongs to a document nobody is looking at any more is
+      // just as misleading as a stale success.
+      if (generation !== docGeneration) return;
       build.error = e instanceof Error ? e.message : String(e);
       ui.mode = 'pdf';
       ui.status = 'Compile error';
     } finally {
+      // Only ever one compile in flight (guarded above), so this always
+      // belongs to the run that set it — including on the stale-return paths.
       build.compiling = false;
     }
   }
@@ -114,7 +150,7 @@
    * fallback. Returns true when the user chose to go ahead.
    */
   async function confirmDiscard(message: string, okLabel: string): Promise<boolean> {
-    if ('__TAURI_INTERNALS__' in window) {
+    if (hasTauriRuntime()) {
       try {
         const { ask } = await import('@tauri-apps/plugin-dialog');
         return await ask(message, {
@@ -137,6 +173,18 @@
       ui.status = 'Opening files requires the desktop app';
       return;
     }
+    // Held Ctrl+O would otherwise stack a discard prompt *and* a file dialog
+    // per auto-repeat.
+    if (opening) return;
+    opening = true;
+    try {
+      await runOpen();
+    } finally {
+      opening = false;
+    }
+  }
+
+  async function runOpen() {
     // Opening replaces the buffer outright, so unsaved edits would disappear
     // with no prompt — and CodeMirror's history would still hold them, so a
     // later Ctrl+Z could paste them into the *newly opened* file and Ctrl+S
@@ -155,6 +203,9 @@
     try {
       const result = await openFileDialog();
       if (!result) return;
+      // The buffer is about to become a different document: invalidate every
+      // in-flight command that captured the old one.
+      newDocumentGeneration();
       doc.source = result.content;
       doc.path = result.path;
       doc.dirty = false;
@@ -175,12 +226,39 @@
   }
 
   async function doSave() {
+    // Untitled documents route through a native Save-As dialog, so a held
+    // Ctrl+S would otherwise open one dialog per auto-repeat, scattering the
+    // buffer across every path the user (or the stack of dialogs) resolved and
+    // leaving doc.path on whichever finished last.
+    if (saving) return;
+    saving = true;
+    // save_file is async and the webview keeps running during the round-trip,
+    // so Editor's updateListener can push new characters into doc.source before
+    // it resolves. Only `snapshot` reaches disk — clearing doc.dirty for text
+    // typed afterwards would strand those characters: the dot goes clean, and
+    // the close guard (`if (!doc.dirty) return`) then destroys the window
+    // without a prompt.
+    const snapshot = doc.source;
+    const generation = docGeneration;
     try {
-      const finalPath = await saveFile(doc.path, doc.source);
+      const finalPath = await saveFile(doc.path, snapshot);
       if (finalPath) {
+        // If the buffer was replaced mid-save, `finalPath` names where the
+        // *previous* document went; adopting it would point the new document's
+        // next save at the old file.
+        if (generation !== docGeneration) {
+          ui.status = `Saved ${finalPath}`;
+          return;
+        }
         doc.path = finalPath;
-        doc.dirty = false;
-        ui.status = `Saved ${finalPath}`;
+        if (doc.source === snapshot) {
+          doc.dirty = false;
+          ui.status = `Saved ${finalPath}`;
+        } else {
+          // Everything up to the snapshot is on disk, but the buffer has moved
+          // past it — stay dirty so the close guard still prompts.
+          ui.status = `Saved ${finalPath} — edits made during the save are still unsaved`;
+        }
       }
     } catch (e) {
       // Ditto: outside the desktop shell nothing was even attempted, and
@@ -189,6 +267,8 @@
         e instanceof DesktopOnlyError
           ? e.message
           : `Save failed: ${e instanceof Error ? e.message : String(e)}`;
+    } finally {
+      saving = false;
     }
   }
 
@@ -205,7 +285,7 @@
   }
 
   function onEngineChange(next: string) {
-    const narrowed = asEngine(next);
+    const narrowed = asEngine(next, engines);
     if (narrowed) engine = narrowed;
   }
 
@@ -286,7 +366,7 @@
         const list = await checkEngines();
         engines = list;
         if (list.length > 0 && !list.includes(engine)) {
-          const first = asEngine(list[0]);
+          const first = asEngine(list[0], list);
           if (first) engine = first;
         }
       } catch {
@@ -301,25 +381,31 @@
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
       const key = e.key.toLowerCase();
+      let action: (() => void) | null = null;
       if (e.shiftKey && key === 'd') {
-        e.preventDefault();
-        toggleTheme();
+        action = toggleTheme;
       } else if (e.shiftKey) {
         // Leave every other Shift+Mod combo (Shift+Ctrl+Z redo, etc.) alone.
         return;
       } else if (key === 's') {
-        e.preventDefault();
-        void doSave();
+        action = () => void doSave();
       } else if (key === 'o') {
-        e.preventDefault();
-        void doOpen();
+        action = () => void doOpen();
       } else if (key === 'b') {
-        e.preventDefault();
-        void compile();
+        action = () => void compile();
       } else if (key === '\\') {
-        e.preventDefault();
-        toggleMode();
+        action = toggleMode;
+      } else {
+        return;
       }
+      // Swallow the combo on every event, including the repeats we drop below,
+      // so a held Ctrl+S can't reach the webview's own handler for it.
+      e.preventDefault();
+      // Holding a key fires keydown ~30 times a second. None of these commands
+      // mean anything repeated — Save and Open would each queue a native dialog,
+      // and the toggles would strobe — so only the first event acts.
+      if (e.repeat) return;
+      action();
     }
     window.addEventListener('keydown', handleKeydown);
 
@@ -450,30 +536,12 @@
         class="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-surface-alt px-3 text-xs font-medium tracking-wide text-fg-muted uppercase"
       >
         <span>Preview</span>
-        <div class="ml-auto flex items-center gap-0.5 rounded-md bg-bg p-0.5 text-[11px] font-normal tracking-normal normal-case">
-          <button
-            type="button"
-            class="rounded px-2 py-0.5 transition-colors {ui.mode === 'live'
-              ? 'bg-surface text-fg shadow-sm'
-              : 'text-fg-muted hover:text-fg'}"
-            onclick={() => setMode('live')}
-            aria-pressed={ui.mode === 'live'}
-            title="Live preview (Ctrl+\\)"
-          >
-            Live
-          </button>
-          <button
-            type="button"
-            class="rounded px-2 py-0.5 transition-colors {ui.mode === 'pdf'
-              ? 'bg-surface text-fg shadow-sm'
-              : 'text-fg-muted hover:text-fg'}"
-            onclick={() => setMode('pdf')}
-            aria-pressed={ui.mode === 'pdf'}
-            title="Compiled PDF (Ctrl+\\)"
-          >
-            PDF
-          </button>
-        </div>
+        <ModeToggle
+          mode={ui.mode}
+          {setMode}
+          size="sm"
+          wrapperClass="ml-auto bg-bg font-normal tracking-normal normal-case"
+        />
       </div>
       <div class="min-h-0 flex-1 overflow-hidden">
         <Preview />

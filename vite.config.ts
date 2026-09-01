@@ -1,4 +1,5 @@
-import { defineConfig, type Plugin } from 'vite';
+/// <reference types="vitest/config" />
+import { defineConfig, type Plugin } from 'vitest/config';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 import { createRequire } from 'node:module';
@@ -11,12 +12,20 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const pdfjsRoot = path.dirname(require.resolve('pdfjs-dist/package.json'));
 
 /**
- * pdf.js fetches its CMap tables and the base-14 standard font programs over
- * HTTP at render time instead of importing them, so Vite's module graph never
- * sees them and they would 404 in the packaged app. Mirror them into `public/`
- * (gitignored) — Vite then serves them in dev and copies them into `dist/` on
- * build, with no extra middleware. `src/lib/preview/pdf.ts` points pdf.js at
- * the resulting `/pdfjs/**` URLs.
+ * Directories pdfjs-dist expects to fetch over HTTP at render time:
+ *   cmaps/          - CMap tables for CJK / non-standard encodings
+ *   standard_fonts/ - the base-14 font programs
+ *   wasm/           - JBIG2 + JPEG2000 image decoders and the QCMS colour engine
+ *   iccs/           - the predefined ICC profile QCMS falls back on
+ */
+const PDFJS_ASSET_DIRS = ['cmaps', 'standard_fonts', 'wasm', 'iccs'] as const;
+
+/**
+ * pdf.js fetches the directories above over HTTP at render time instead of
+ * importing them, so Vite's module graph never sees them and they would 404 in
+ * the packaged app. Mirror them into `public/` (gitignored) — Vite then serves
+ * them in dev and copies them into `dist/` on build, with no extra middleware.
+ * `src/lib/preview/pdf.ts` points pdf.js at the resulting `/pdfjs/**` URLs.
  */
 function pdfjsAssets(): Plugin {
   return {
@@ -27,19 +36,26 @@ function pdfjsAssets(): Plugin {
       ).version;
       const outRoot = path.join(projectRoot, 'public', 'pdfjs');
       const stamp = path.join(outRoot, '.version');
+      // The stamp covers the *set* of mirrored directories as well as the
+      // version, so adding one here re-copies on the next build instead of
+      // silently keeping a mirror that is missing it.
+      const want = `${version} ${PDFJS_ASSET_DIRS.join(',')}`;
 
-      // Re-copy only when the installed pdfjs-dist version changes, so an
-      // upgrade can't leave stale CMaps behind while a normal build stays fast.
-      if (fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8') === version) return;
+      // Re-copy only when that changes, so an upgrade can't leave stale CMaps
+      // behind while a normal build stays fast.
+      if (fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8') === want) return;
 
       fs.rmSync(outRoot, { recursive: true, force: true });
       fs.mkdirSync(outRoot, { recursive: true });
-      for (const dir of ['cmaps', 'standard_fonts']) {
+      for (const dir of PDFJS_ASSET_DIRS) {
         const from = path.join(pdfjsRoot, dir);
-        if (!fs.existsSync(from)) continue;
+        if (!fs.existsSync(from)) {
+          this.warn(`pdfjs-dist has no ${dir}/ directory - PDFs needing it may fail to render`);
+          continue;
+        }
         fs.cpSync(from, path.join(outRoot, dir), { recursive: true });
       }
-      fs.writeFileSync(stamp, version);
+      fs.writeFileSync(stamp, want);
     }
   };
 }
@@ -61,5 +77,14 @@ export default defineConfig({
     target: 'esnext',
     sourcemap: false,
     emptyOutDir: true
+  },
+  // Vitest reuses everything above, so a test imports `render.ts` through the
+  // same resolution and transform pipeline the app does. The renderer is pure
+  // string-in / string-out, so it needs no DOM; `css: false` keeps KaTeX's
+  // stylesheet import a no-op stub instead of pulling Tailwind's pipeline in.
+  test: {
+    include: ['src/**/*.{test,spec}.ts'],
+    environment: 'node',
+    css: false
   }
 });
