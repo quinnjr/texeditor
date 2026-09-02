@@ -489,15 +489,12 @@
     onOpen={doOpen}
     onSave={doSave}
     onCompile={compile}
-    {setMode}
     {toggleTheme}
   />
 
   <main bind:this={splitEl} class="flex min-h-0 flex-1 overflow-hidden">
     <section class="flex min-h-0 min-w-0 flex-col overflow-hidden" style="flex: 0 0 {ui.splitPct}%">
-      <div
-        class="flex h-9 shrink-0 items-center border-b border-edge bg-surface-alt px-3 text-xs font-medium tracking-wide text-fg-muted uppercase"
-      >
+      <div class="mark flex h-8 shrink-0 items-center border-b border-edge bg-surface-alt px-4 text-fg-muted">
         Source
       </div>
       <div class="min-h-0 flex-1 overflow-hidden">
@@ -520,7 +517,7 @@
       aria-valuemin={SPLIT_MIN}
       aria-valuemax={SPLIT_MAX}
       tabindex="0"
-      class="relative w-1.5 shrink-0 cursor-col-resize touch-none bg-edge transition-colors hover:bg-accent/60 focus-visible:bg-accent focus-visible:outline-none {dragging
+      class="relative w-px shrink-0 cursor-col-resize touch-none bg-edge transition-colors before:absolute before:inset-y-0 before:-left-2 before:-right-2 before:content-[''] hover:bg-accent focus-visible:bg-accent focus-visible:outline-none {dragging
         ? 'bg-accent'
         : ''}"
       onpointerdown={onDividerPointerDown}
@@ -533,15 +530,10 @@
 
     <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div
-        class="flex h-9 shrink-0 items-center gap-2 border-b border-edge bg-surface-alt px-3 text-xs font-medium tracking-wide text-fg-muted uppercase"
+        class="mark flex h-8 shrink-0 items-center gap-2 border-b border-edge bg-surface-alt pr-2 pl-4 text-fg-muted"
       >
         <span>Preview</span>
-        <ModeToggle
-          mode={ui.mode}
-          {setMode}
-          size="sm"
-          wrapperClass="ml-auto bg-bg font-normal tracking-normal normal-case"
-        />
+        <ModeToggle mode={ui.mode} {setMode} size="sm" wrapperClass="ml-auto -mb-px" />
       </div>
       <div class="min-h-0 flex-1 overflow-hidden">
         <Preview />
@@ -549,11 +541,13 @@
     </section>
   </main>
 
-  <footer class="flex h-6 shrink-0 items-center gap-3 border-t border-edge bg-surface px-3 text-xs text-fg-muted">
-    <span class="truncate">{ui.status}</span>
+  <footer
+    class="mark flex h-7 shrink-0 items-center gap-3 border-t border-edge bg-surface px-4 text-fg-muted"
+  >
+    <span class="truncate normal-case tracking-normal">{ui.status}</span>
     {#if build.error}
       <span class="text-danger">Build error — see log</span>
     {/if}
-    <span class="ml-auto">{engine || 'no engine'}</span>
+    <span class="ml-auto normal-case tracking-normal">{engine || 'no engine'}</span>
   </footer>
 </div>

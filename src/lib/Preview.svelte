@@ -262,13 +262,13 @@
 
 <div class="flex h-full w-full flex-col overflow-hidden bg-surface-alt text-fg">
   {#if ui.mode === 'live'}
-    <div class="min-h-0 flex-1 overflow-auto">
+    <div class="tex-preview-scroll min-h-0 flex-1 overflow-auto">
       <div class="tex-preview-shell" bind:this={contentEl}>
         {@html renderedHtml}
       </div>
     </div>
     <footer
-      class="flex h-7 shrink-0 items-center gap-4 border-t border-edge bg-surface px-3 text-xs text-fg-muted"
+      class="mark flex h-7 shrink-0 items-center gap-4 border-t border-edge bg-surface px-4 text-fg-muted"
     >
       <span>{wordCount} {wordCount === 1 ? 'word' : 'words'}</span>
       <span>{mathCount} {mathCount === 1 ? 'math block' : 'math blocks'}</span>
@@ -292,7 +292,7 @@
           >{logTail(build.log)}</pre>
         </div>
       {:else if build.pdfUrl}
-        <div class="flex h-8 shrink-0 items-center gap-1 border-b border-edge bg-surface px-2 text-xs">
+        <div class="mark flex h-8 shrink-0 items-center gap-1 border-b border-edge bg-surface px-2 text-fg-muted">
           <button
             class="rounded px-2 py-0.5 text-fg-muted hover:bg-surface-alt hover:text-fg disabled:opacity-40"
             onclick={zoomOut}
@@ -341,7 +341,7 @@
       {/if}
     </div>
     <footer
-      class="flex h-7 shrink-0 items-center gap-4 border-t border-edge bg-surface px-3 text-xs text-fg-muted"
+      class="mark flex h-7 shrink-0 items-center gap-4 border-t border-edge bg-surface px-4 text-fg-muted"
     >
       <span
         >{build.compiling
@@ -390,9 +390,38 @@
     border-radius: 2px;
   }
 
+  /* The live view renders on the same sheet the compiled PDF is shown on
+     (.tex-pdf-page above): same stock, same shadow, same corner. Toggling
+     Live/PDF then swaps how the page is rendered rather than swapping the
+     page for a differently-styled web document. */
   .tex-preview-shell {
-    padding: 2.5rem 1.5rem 4rem;
-    max-width: 100%;
+    background: var(--app-paper);
+    box-shadow:
+      0 1px 3px rgb(0 0 0 / 0.2),
+      0 6px 18px rgb(0 0 0 / 0.14);
+    border-radius: 2px;
+    /* True Letter proportions at 96dpi: an 8.5in sheet (51rem) with LaTeX's
+       1in margins (6rem), leaving a 6.5in text block. The live sheet and the
+       rasterised PDF page then carry the same measure at the same scale, so
+       switching between them barely moves a line. */
+    width: min(51rem, 100%);
+    margin: 0 auto;
+    padding: 6rem 6rem 6.5rem;
+  }
+
+  /* Desk showing on both sides is what makes the sheet read as a sheet, so
+     the gutter is on the scroller and never collapses. */
+  .tex-preview-scroll {
+    padding: 1.75rem 2rem 3rem;
+  }
+
+  @media (max-width: 48rem) {
+    .tex-preview-scroll {
+      padding: 0.875rem 0.875rem 1.5rem;
+    }
+    .tex-preview-shell {
+      padding: 2rem 1.75rem 2.5rem;
+    }
   }
 
   /* ---- Rendered-document typography ---------------------------------
@@ -401,66 +430,83 @@
      namespaced under .tex-doc-root to keep it from leaking into the rest
      of the app shell.                                                   */
   :global(.tex-doc-root) {
-    max-width: 42rem;
-    margin: 0 auto;
-    font-family: 'Georgia', 'Iowan Old Style', 'Palatino Linotype', 'Times New Roman', serif;
-    font-size: 0.98rem;
-    line-height: 1.7;
-    color: var(--app-fg);
+    font-family: var(--app-font-serif);
+    font-size: 1.0625rem;
+    line-height: 1.48;
+    color: var(--app-ink);
+    font-kerning: normal;
+    font-variant-ligatures: common-ligatures;
   }
 
+  /* LaTeX's \maketitle: centred, no rule under it, generous air below. */
   :global(.tex-title-block) {
     text-align: center;
-    margin: 0 0 2.5rem;
-    padding-bottom: 1.5rem;
-    border-bottom: 1px solid var(--app-border);
+    margin: 0 0 2.75rem;
   }
   :global(.tex-title) {
-    font-size: 1.9rem;
-    font-weight: 600;
-    line-height: 1.25;
-    margin: 0 0 0.6rem;
+    font-size: 1.65rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin: 0 0 0.9rem;
+    letter-spacing: -0.005em;
   }
   :global(.tex-author) {
-    font-size: 1.05rem;
-    color: var(--app-fg-muted);
-    margin: 0 0 0.25rem;
+    font-size: 1.0625rem;
+    color: var(--app-ink);
+    margin: 0 0 0.3rem;
   }
   :global(.tex-date) {
-    font-size: 0.9rem;
-    color: var(--app-fg-muted);
+    font-size: 1.0625rem;
+    color: var(--app-ink);
   }
 
+  /* Headings follow LaTeX's own article class: bold, unruled, sized close
+     to the body, with the space above doing the separating. The section
+     number is part of the document, so it is set in ink like everything
+     else on the page — not in the chrome's blue. */
   :global(.tex-heading) {
-    font-weight: 600;
-    line-height: 1.3;
-    margin: 1.8em 0 0.6em;
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 1.9em 0 0.55em;
     scroll-margin-top: 1rem;
+    color: var(--app-ink);
   }
   :global(.tex-heading:first-child) {
     margin-top: 0;
   }
   :global(.tex-section) {
-    font-size: 1.4rem;
-    padding-bottom: 0.3rem;
-    border-bottom: 1px solid var(--app-border);
+    font-size: 1.3rem;
   }
   :global(.tex-subsection) {
-    font-size: 1.18rem;
+    font-size: 1.13rem;
   }
   :global(.tex-subsubsection) {
-    font-size: 1.04rem;
+    font-size: 1.02rem;
   }
   :global(.tex-secnum) {
-    color: var(--app-accent);
-    margin-right: 0.55em;
+    margin-right: 0.6em;
     font-variant-numeric: tabular-nums;
   }
 
+  /* LaTeX separates paragraphs by indenting the next one, not by leading a
+     gap between them. The first paragraph after a heading is flush. */
   :global(.tex-p) {
-    margin: 0 0 1em;
+    margin: 0 0 0.9em;
     text-align: justify;
     hyphens: auto;
+  }
+  /* Between two consecutive paragraphs the gap closes and the indent takes
+     over. Around anything else — a list, a display, a table — the gap
+     stays, exactly as LaTeX leads them. Without :has() support this simply
+     falls back to gap-and-indent, which is a compromise, not a break. */
+  :global(.tex-p:has(+ .tex-p)) {
+    margin-bottom: 0;
+  }
+  :global(.tex-p + .tex-p) {
+    text-indent: 1.5em;
+  }
+  :global(.tex-heading + .tex-p) {
+    text-indent: 0;
   }
 
   :global(.tex-list) {
@@ -493,8 +539,8 @@
   :global(.tex-quote) {
     margin: 1em 0 1em 0;
     padding: 0.2em 1em;
-    border-left: 3px solid var(--app-border);
-    color: var(--app-fg-muted);
+    border-left: 3px solid var(--app-paper-rule);
+    color: var(--app-ink-muted);
     font-style: italic;
   }
   :global(.tex-center) {
@@ -508,12 +554,12 @@
   :global(.tex-caption) {
     margin-top: 0.5em;
     font-size: 0.88rem;
-    color: var(--app-fg-muted);
+    color: var(--app-ink-muted);
     text-align: left;
   }
   :global(.tex-caption-label) {
     font-weight: 600;
-    color: var(--app-fg);
+    color: var(--app-ink);
   }
 
   :global(.tex-table-wrap) {
@@ -526,7 +572,7 @@
     font-size: 0.92rem;
   }
   :global(.tex-table td) {
-    border: 1px solid var(--app-border);
+    border: 1px solid var(--app-paper-rule);
     padding: 0.35em 0.75em;
   }
 
@@ -535,8 +581,8 @@
     display: block;
     margin: 1em 0;
     padding: 0.75em 1em;
-    background: var(--app-surface);
-    border: 1px solid var(--app-border);
+    background: var(--app-paper-tint);
+    border: 1px solid var(--app-paper-rule);
     border-radius: 0.375rem;
     overflow-x: auto;
     font-family: var(--font-mono);
@@ -548,7 +594,7 @@
   :global(.tex-doc-root code) {
     font-family: var(--font-mono);
     font-size: 0.88em;
-    background: var(--app-surface);
+    background: var(--app-paper-tint);
     padding: 0.1em 0.3em;
     border-radius: 0.25em;
   }
@@ -559,7 +605,7 @@
   }
 
   :global(.tex-link) {
-    color: var(--app-accent);
+    color: var(--app-paper-link);
     text-decoration: underline;
     text-underline-offset: 2px;
   }
@@ -568,9 +614,9 @@
      not less — plain unstyled text would let a blocked link look plainer
      (and so safer) than a working one. */
   :global(.tex-link-blocked) {
-    color: var(--app-danger);
+    color: var(--app-paper-flag);
     text-decoration: underline dashed;
-    text-decoration-color: var(--app-danger);
+    text-decoration-color: var(--app-paper-flag);
     text-underline-offset: 2px;
     cursor: not-allowed;
   }
@@ -579,14 +625,14 @@
     font-size: 0.85em;
   }
   :global(.tex-ref) {
-    color: var(--app-accent);
+    color: var(--app-paper-link);
     text-decoration: none;
   }
   :global(.tex-ref-pending) {
-    color: var(--app-danger);
+    color: var(--app-paper-flag);
   }
   :global(.tex-cite) {
-    color: var(--app-accent);
+    color: var(--app-paper-link);
   }
   :global(.tex-label-anchor) {
     scroll-margin-top: 1rem;
@@ -595,11 +641,11 @@
   :global(.tex-fn-rule) {
     margin: 2.5em 0 1em;
     border: none;
-    border-top: 1px solid var(--app-border);
+    border-top: 1px solid var(--app-paper-rule);
   }
   :global(.tex-footnotes) {
     font-size: 0.85rem;
-    color: var(--app-fg-muted);
+    color: var(--app-ink-muted);
     padding-left: 1.4em;
   }
   :global(.tex-footnotes li) {
@@ -607,16 +653,16 @@
   }
   :global(.tex-fn-ref a),
   :global(.tex-fn-back) {
-    color: var(--app-accent);
+    color: var(--app-paper-link);
     text-decoration: none;
   }
 
   :global(.tex-math-error) {
-    color: var(--app-danger);
+    color: var(--app-paper-flag);
     font-family: var(--font-mono);
   }
   :global(.tex-render-error) {
-    color: var(--app-danger);
+    color: var(--app-paper-flag);
     font-family: var(--font-mono);
     white-space: pre-wrap;
   }
@@ -634,7 +680,7 @@
   }
   :global(.tex-eqn-num) {
     flex: 0 0 auto;
-    color: var(--app-fg-muted);
+    color: var(--app-ink);
     font-variant-numeric: tabular-nums;
   }
 

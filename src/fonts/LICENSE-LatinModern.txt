@@ -1,0 +1,21 @@
+Latin Modern fonts
+==================
+
+The .woff2 files in this directory are subsets of the Latin Modern OpenType
+fonts (lmroman10-regular/italic/bold/bolditalic, lmmono10-regular), created
+with pyftsubset and restricted to Latin-1 plus typographic punctuation.
+
+Copyright (c) 2003-2009 B. Jackowski and J.M. Nowacki (on behalf of TeX
+Users Groups).
+
+Latin Modern is distributed under the GUST Font License (GFL), a free
+licence modelled on the LaTeX Project Public License. It permits use,
+redistribution and modification — including subsetting and format
+conversion as done here — provided the licence travels with the fonts and
+modified versions are renamed or clearly marked as modified.
+
+Full licence text: https://www.gust.org.pl/projects/e-foundry/licenses
+Upstream project:  https://www.gust.org.pl/projects/e-foundry/latin-modern
+
+These files are subsets of the originals, not modifications of their
+outlines or metrics.

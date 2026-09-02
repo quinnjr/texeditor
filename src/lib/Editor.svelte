@@ -24,7 +24,6 @@
   } from '@codemirror/language';
   import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap } from '@codemirror/autocomplete';
   import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-  import { oneDark } from '@codemirror/theme-one-dark';
   import { doc, ui } from './stores.svelte';
   import { latex, latexHighlightStyle } from './editor/latex-language';
   import { latexCompletions } from './editor/latex-completions';
@@ -32,7 +31,7 @@
   let hostEl: HTMLDivElement;
   let view: EditorView | undefined;
 
-  /** Swaps the base UI theme (light EditorView.theme <-> one-dark) without rebuilding the editor. */
+  /** Swaps the editor theme without rebuilding the editor. */
   const themeCompartment = new Compartment();
 
   /** Holds the undo history so it can be thrown away when a different document is loaded. */
@@ -42,71 +41,76 @@
    *  update listener below does not mistake it for a user edit and mark the doc dirty. */
   let applyingExternal = false;
 
-  const lightTheme = EditorView.theme(
-    {
-      '&': {
-        height: '100%',
-        backgroundColor: 'var(--app-surface, #ffffff)',
-        color: 'var(--app-fg, #1b1b19)',
-        '--cm-latex-comment': '#6b7280',
-        '--cm-latex-escape': '#b5651d',
-        '--cm-latex-command': '#af00db',
-        '--cm-latex-env': '#267f99',
-        '--cm-latex-math': '#0550ae',
-        '--cm-latex-mathvar': '#1a56b0',
-        '--cm-latex-brace': '#57534e',
-        '--cm-latex-op': '#d73a49',
-        '--cm-latex-number': '#098658',
-        '--cm-latex-heading': '#005cc5'
-      },
-      '.cm-content': { caretColor: 'var(--app-accent, #2f6feb)' },
-      '.cm-cursor': { borderLeftColor: 'var(--app-accent, #2f6feb)' },
-      '.cm-scroller': { fontFamily: 'var(--font-mono, ui-monospace, monospace)', lineHeight: '1.5' },
-      '.cm-gutters': {
-        backgroundColor: 'var(--app-surface-alt, #f1f1ef)',
-        color: 'var(--app-fg-muted, #6b6b66)',
-        border: 'none',
-        borderRight: '1px solid var(--app-border, #d9d9d5)'
-      },
-      '.cm-activeLine': { backgroundColor: 'rgba(47, 111, 235, 0.06)' },
-      '.cm-activeLineGutter': { backgroundColor: 'rgba(47, 111, 235, 0.10)' },
-      '.cm-selectionMatch': { backgroundColor: 'rgba(255, 196, 0, 0.35)' },
-      '.cm-foldPlaceholder': {
-        backgroundColor: 'var(--app-surface-alt, #f1f1ef)',
-        border: '1px solid var(--app-border, #d9d9d5)',
-        color: 'var(--app-fg-muted, #6b6b66)'
-      },
-      '&.cm-focused': { outline: 'none' },
-      '&.cm-focused .cm-selectionBackground': { backgroundColor: 'rgba(47, 111, 235, 0.25)' }
+  /* One theme for both schemes. Every colour resolves to an app token that
+     `.dark` already swaps in app.css, so the editor cannot drift out of step
+     with the rest of the chrome and there is only one palette to maintain.
+     The markup is annotation, not document, so it is set in the chrome's
+     non-repro blue family with a single warm ochre for maths. */
+  const appTheme = EditorView.theme({
+    '&': {
+      height: '100%',
+      backgroundColor: 'var(--app-surface)',
+      color: 'var(--app-fg)'
     },
-    { dark: false }
-  );
-
-  const darkAccent = EditorView.theme(
-    {
-      '&': {
-        height: '100%',
-        '--cm-latex-comment': '#8b93a8',
-        '--cm-latex-escape': '#d19a66',
-        '--cm-latex-command': '#c678dd',
-        '--cm-latex-env': '#56b6c2',
-        '--cm-latex-math': '#61afef',
-        '--cm-latex-mathvar': '#79b8ff',
-        '--cm-latex-brace': '#abb2bf',
-        '--cm-latex-op': '#e06c75',
-        '--cm-latex-number': '#98c379',
-        '--cm-latex-heading': '#61afef'
-      },
-      '.cm-activeLine': { backgroundColor: 'rgba(110, 160, 255, 0.08)' },
-      '.cm-activeLineGutter': { backgroundColor: 'rgba(110, 160, 255, 0.14)' },
-      '.cm-selectionMatch': { backgroundColor: 'rgba(255, 196, 0, 0.25)' },
-      '&.cm-focused': { outline: 'none' }
+    '.cm-content': { caretColor: 'var(--app-accent)' },
+    '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--app-accent)' },
+    '.cm-scroller': {
+      fontFamily: 'var(--app-font-ui)',
+      fontSize: '12.5px',
+      lineHeight: '1.65'
     },
-    { dark: true }
-  );
+    '.cm-gutters': {
+      backgroundColor: 'transparent',
+      color: 'var(--app-fg-muted)',
+      border: 'none',
+      paddingRight: '0.35rem',
+      opacity: '0.55'
+    },
+    '.cm-lineNumbers .cm-gutterElement': { padding: '0 0.5rem 0 1rem' },
+    '.cm-activeLine': { backgroundColor: 'var(--app-accent-soft)' },
+    '.cm-activeLineGutter': { backgroundColor: 'transparent', opacity: '1' },
+    '.cm-selectionMatch': { backgroundColor: 'var(--app-accent-soft)' },
+    '.cm-matchingBracket, &.cm-focused .cm-matchingBracket': {
+      backgroundColor: 'transparent',
+      outline: '1px solid var(--app-border-strong)'
+    },
+    '.cm-foldPlaceholder': {
+      backgroundColor: 'transparent',
+      border: '1px solid var(--app-border-strong)',
+      borderRadius: '2px',
+      color: 'var(--app-fg-muted)',
+      padding: '0 0.35em',
+      margin: '0 0.2em'
+    },
+    '.cm-panels': {
+      backgroundColor: 'var(--app-surface-alt)',
+      color: 'var(--app-fg)',
+      border: 'none',
+      borderTop: '1px solid var(--app-border)'
+    },
+    '.cm-panel input, .cm-panel button': {
+      fontFamily: 'var(--app-font-ui)',
+      fontSize: '11px'
+    },
+    '.cm-tooltip': {
+      backgroundColor: 'var(--app-surface-alt)',
+      border: '1px solid var(--app-border)',
+      borderRadius: '2px'
+    },
+    '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+      backgroundColor: 'var(--app-accent-soft)',
+      color: 'var(--app-fg)'
+    },
+    '&.cm-focused': { outline: 'none' },
+    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
+      backgroundColor: 'var(--app-accent-soft)'
+    }
+  });
 
   function themeExtensions(theme: 'light' | 'dark'): Extension {
-    return theme === 'dark' ? [oneDark, darkAccent] : [lightTheme];
+    // `dark` only tells CodeMirror which built-in defaults to assume; the
+    // colours themselves come from the tokens above either way.
+    return [appTheme, EditorView.darkTheme.of(theme === 'dark')];
   }
 
   function buildExtensions(): Extension[] {
