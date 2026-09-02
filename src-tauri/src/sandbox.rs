@@ -84,6 +84,16 @@ const SYSTEM_RW_DEVICES: &[&str] = &[
 
 /// What a confined child may touch. Paths that do not exist are dropped when
 /// the ruleset is built, so every list can be a superset of reality.
+/// Off Linux `confine_current_thread` ignores the policy entirely, so *every*
+/// field here is structurally dead there and `-D warnings` fails the build (it
+/// did, on both macOS runners). The attribute sits on the struct rather than on
+/// individual fields so that adding a Landlock-only field later cannot re-break
+/// the macOS jobs at tag time; annotating fields one at a time was whack-a-mole,
+/// and which ones needed it depended on unrelated code elsewhere happening to
+/// assign them. `allow` rather than `expect`: the unit tests read these on
+/// every platform, so an expectation would be fulfilled in the lib target and
+/// unfulfilled in the test target, which is itself an error.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Debug, Default, Clone)]
 pub struct Policy {
     /// Readable and executable.
@@ -92,14 +102,6 @@ pub struct Policy {
     pub read_write: Vec<PathBuf>,
     /// Writable but not readable — somewhere to drop temp files without being
     /// able to read what other programs left behind.
-    ///
-    /// Only the Landlock backend reads this, so off Linux it is dead in the
-    /// library and `-D warnings` fails the build (it did, on both macOS
-    /// runners). `allow` rather than `expect`: the unit tests *do* read it on
-    /// every platform, so under `--all-targets` an expectation is fulfilled in
-    /// the lib target and unfulfilled in the test target, which is itself an
-    /// error.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub write_only: Vec<PathBuf>,
     /// Whether the child may open TCP sockets.
     ///
@@ -155,8 +157,9 @@ impl Policy {
 pub enum Status {
     /// The kernel is enforcing the policy.
     ///
-    /// Constructed only by the Landlock backend; see the note on
-    /// `Policy::write_only` for why this is `allow` and not `expect`.
+    /// Constructed only by the Landlock backend, so off Linux it is never built.
+    /// `allow` rather than `expect` because the crate's MSRV (rust-version
+    /// 1.77.2) predates `#[expect]`, which stabilised in 1.81.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Enforced,
     /// The policy is not (or only partly) in force; the reason is meant to be
@@ -377,7 +380,11 @@ fn user_cache_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache"))
 }
 
-#[cfg(test)]
+// POSIX paths throughout: the policy is expressed as absolute Unix paths, and
+// `Path::is_absolute("/usr")` is false on Windows (no drive prefix), so these
+// assertions test nothing there and fail. The sandbox itself is Linux-only;
+// the Linux-specific cases inside carry their own narrower gate.
+#[cfg(all(test, unix))]
 mod tests {
     #[test]
     fn a_compile_policy_has_no_network_by_default() {

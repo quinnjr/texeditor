@@ -17,19 +17,34 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-// On Windows `pnpm` is a .cmd shim, and execFileSync does not resolve those
-// without a shell - it fails with ENOENT, which is what broke the Windows
-// runner. Naming the shim explicitly is safer than `shell: true`, which would
-// put the arguments through cmd.exe's parsing rules.
-const PNPM = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+// pnpm on Windows is a .cmd/.ps1 shim. Since Node 18.20.2 / 20.12.2
+// (CVE-2024-27980) spawnSync refuses to execute .bat/.cmd at all unless
+// `shell: true`, so naming `pnpm.cmd` only trades ENOENT for EINVAL - the
+// guard lives in the spawn layer, not the resolver. The arguments here are
+// fixed literals with no spaces or shell metacharacters, so routing them
+// through cmd.exe is safe; do not extend this helper with interpolated input.
+const WINDOWS = process.platform === 'win32';
 
 function sh(cmd, args, cwd = ROOT) {
-  return execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return execFileSync(cmd, args, {
+    cwd,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    shell: WINDOWS
+  });
 }
 
 /** Runtime npm dependencies, deduped by name. */
 function npmPackages() {
-  const raw = JSON.parse(sh(PNPM, ['licenses', 'list', '--json', '--prod']));
+  const raw = JSON.parse(sh('pnpm', ['licenses', 'list', '--json', '--prod']));
+  // pnpm reports failures as {"error": {...}} on stdout *with exit code 0*, so
+  // iterating the buckets blind throws "pkgs is not iterable" instead of
+  // saying what went wrong.
+  if (raw && typeof raw === 'object' && raw.error) {
+    throw new Error(
+      `pnpm licenses failed: ${raw.error.code ?? 'unknown'} - ${raw.error.message ?? ''}`
+    );
+  }
   const out = new Map();
   for (const [license, pkgs] of Object.entries(raw)) {
     for (const p of pkgs) {
@@ -43,16 +58,27 @@ function npmPackages() {
   }
   const resolved = [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 
-  // Without an installed node_modules, `pnpm licenses` still exits 0 but reports
-  // every package as "Unknown" - which would quietly replace a correct notice
-  // with a worthless one. A licence notice that has lost its licences is worse
-  // than no regeneration at all, so refuse to write it.
-  const unknown = resolved.filter((p) => /^unknown$/i.test(p.license));
-  if (unknown.length > 0) {
+  // Two ways to end up writing a worthless notice, both at exit code 0:
+  //
+  //   · no installed node_modules - every package comes back "Unknown"
+  //   · a lockfile that resolves no prod importers - the result is `{}`
+  //
+  // Either would silently drop every real licence from the file. Refuse both.
+  // Deliberately NOT "any package is Unknown": a single dependency whose
+  // package.json omits `license` is normal, and failing on it would block
+  // every release with no way to proceed. It still shows up in the notice as
+  // Unknown, which is the honest rendering.
+  if (resolved.length === 0) {
     throw new Error(
-      `pnpm reported no licence for ${unknown.length}/${resolved.length} packages ` +
-        `(${unknown.slice(0, 3).map((p) => p.name).join(', ')}...). ` +
-        'Run `pnpm install` first - the notice was NOT rewritten.'
+      'pnpm resolved no production packages. Run `pnpm install` first - the notice was NOT rewritten.'
+    );
+  }
+  const unknown = resolved.filter((p) => /^unknown$/i.test(p.license));
+  if (unknown.length === resolved.length) {
+    throw new Error(
+      `pnpm reported no licence for any of the ${resolved.length} packages, which means ` +
+        'they are unresolved rather than genuinely unlicensed. Run `pnpm install` first - ' +
+        'the notice was NOT rewritten.'
     );
   }
   return resolved;

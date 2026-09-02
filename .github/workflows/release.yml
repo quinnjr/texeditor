@@ -63,7 +63,7 @@ jobs:
       # glibc/webkit, so it installs on both. Building on 24.04 would silently
       # drop support for every 22.04 user.
       - name: Install Linux build dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -99,12 +99,12 @@ jobs:
       # could break (it did: pnpm is a .cmd shim on Windows and could not be
       # spawned at all).
       - name: Verify the third-party notice is current
-        if: matrix.platform == 'ubuntu-22.04'
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           node scripts/gen-third-party.mjs
           if ! git diff --quiet -- THIRD-PARTY-LICENSES.md; then
-            echo "::error::THIRD-PARTY-LICENSES.md is stale. Run 'pnpm licenses' and commit the result."
+            echo "::error::THIRD-PARTY-LICENSES.md is stale. Run 'pnpm run licenses' and commit the result."
             git diff -- THIRD-PARTY-LICENSES.md | head -60
             exit 1
           fi
@@ -121,9 +121,13 @@ jobs:
       # is old enough to invoke `appstream-compose`, which current SDKs no
       # longer ship, and the build then dies after compiling everything.
       - name: Install Flatpak toolchain
-        if: matrix.platform == 'ubuntu-22.04'
+        if: runner.os == 'Linux'
         run: |
-          sudo apt-get install -y flatpak
+          # dbus-run-session: `flatpak run` needs a session bus to resolve the
+          # SDK and a hosted runner has none. flatpak-builder: kept as a
+          # fallback so the Flatpak step still has a builder if the Flathub
+          # install fails.
+          sudo apt-get install -y flatpak flatpak-builder dbus
           flatpak remote-add --user --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
           flatpak install --user --noninteractive flathub org.flatpak.Builder
@@ -161,7 +165,7 @@ jobs:
       # Flatpak wraps that same .deb rather than rebuilding, so it cannot drift
       # from the other Linux installers.
       - name: Build Flatpak bundle
-        if: matrix.platform == 'ubuntu-22.04'
+        if: runner.os == 'Linux'
         run: ./scripts/build-flatpak.sh --no-install
 
       - name: Upload installers as build artifacts
