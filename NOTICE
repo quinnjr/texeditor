@@ -1,0 +1,26 @@
+TeX Viewer
+Copyright 2026 Joseph R. Quinn
+
+This product includes software developed as part of the following projects:
+
+  Tectonic (https://tectonic-typesetting.github.io/)
+    MIT licensed. Redistributed unmodified as a sidecar binary so a fresh
+    install can typeset a PDF without a separate TeX distribution. Tectonic
+    incorporates TeX, XeTeX and TeX Live components under their own permissive
+    licences. See LICENSES/tectonic.LICENSE.
+
+  Latin Modern (https://www.gust.org.pl/projects/e-foundry/latin-modern)
+    Copyright (c) 2003-2009 B. Jackowski and J.M. Nowacki, on behalf of TeX
+    Users Groups. Distributed under the GUST Font License. Five faces are
+    subset to Latin-1 and typographic punctuation and vendored in src/fonts/;
+    the outlines and metrics are unmodified. See
+    LICENSES/latin-modern.GUST-FONT-LICENSE.txt.
+
+  KaTeX (https://katex.org/)
+    MIT licensed. See LICENSES/katex.LICENSE.
+
+  PDF.js (https://mozilla.github.io/pdf.js/)
+    Apache-2.0 licensed. See LICENSES/pdfjs.LICENSE.
+
+A complete inventory of linked and bundled dependencies, generated from the
+dependency graph, is in THIRD-PARTY-LICENSES.md.

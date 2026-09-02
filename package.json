@@ -10,7 +10,10 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "fetch:tectonic": "node scripts/fetch-tectonic.mjs",
+    "licenses": "node scripts/gen-third-party.mjs",
+    "prebundle": "node scripts/fetch-tectonic.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
@@ -39,5 +42,7 @@
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "codemirror": "^6.0.2",
     "katex": "^0.18.4"
-  }
+  },
+  "license": "Apache-2.0",
+  "description": "Write LaTeX and see the page as it will print."
 }

@@ -1,5 +1,4 @@
-/// <reference types="vitest/config" />
-import { defineConfig, type Plugin } from 'vitest/config';
+import { defineConfig, type Plugin } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 import { createRequire } from 'node:module';
@@ -77,14 +76,5 @@ export default defineConfig({
     target: 'esnext',
     sourcemap: false,
     emptyOutDir: true
-  },
-  // Vitest reuses everything above, so a test imports `render.ts` through the
-  // same resolution and transform pipeline the app does. The renderer is pure
-  // string-in / string-out, so it needs no DOM; `css: false` keeps KaTeX's
-  // stylesheet import a no-op stub instead of pulling Tailwind's pipeline in.
-  test: {
-    include: ['src/**/*.{test,spec}.ts'],
-    environment: 'node',
-    css: false
   }
 });

@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.joseph.texviewer</id>
+
+  <name>TeX Viewer</name>
+  <summary>Write LaTeX and see the page as it will print</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0</project_license>
+
+  <developer id="dev.joseph">
+    <name>Joseph R. Quinn</name>
+  </developer>
+
+  <description>
+    <p>
+      A desktop LaTeX editor with a split view: your source on the left, the
+      rendered document on the right.
+    </p>
+    <p>The preview has two modes:</p>
+    <ul>
+      <li>
+        Live — an instant rendering of a useful subset of LaTeX, with maths
+        typeset by KaTeX. It updates as you type and needs no compiler.
+      </li>
+      <li>
+        PDF — the genuine article, produced by running a real LaTeX engine over
+        the document and rasterising the result.
+      </li>
+    </ul>
+    <p>
+      Both modes render on the same sheet, in Latin Modern — the typeface
+      pdflatex itself sets — at the same measure, so switching between them
+      compares one document two ways rather than swapping it for a
+      differently-styled web page.
+    </p>
+    <p>
+      A Tectonic engine is bundled, so PDF compilation works without installing
+      a TeX distribution first; an existing pdflatex, xelatex or lualatex is
+      preferred when one is present. The first compile with the bundled engine
+      downloads the support files the document needs and caches them.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">dev.joseph.texviewer.desktop</launchable>
+
+  <url type="homepage">https://github.com/quinnjr/texeditor</url>
+  <url type="bugtracker">https://github.com/quinnjr/texeditor/issues</url>
+
+  <content_rating type="oars-1.1" />
+
+  <categories>
+    <category>Office</category>
+    <category>Publishing</category>
+  </categories>
+
+  <keywords>
+    <keyword>LaTeX</keyword>
+    <keyword>TeX</keyword>
+    <keyword>PDF</keyword>
+    <keyword>typesetting</keyword>
+  </keywords>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <releases>
+    <release version="0.1.0" date="2026-09-02">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>
