@@ -1,0 +1,75 @@
+# Flatpak manifest for TeX Viewer.
+#
+# Built from the .deb the Tauri bundler already produces, rather than
+# recompiling inside the Flatpak sandbox: the deb is the artifact we test and
+# ship, so packaging it directly means the Flatpak cannot drift from the other
+# Linux installers. scripts/build-flatpak.sh stages the deb next to this file
+# under a stable name before invoking flatpak-builder.
+id: dev.joseph.texviewer
+
+# GNOME's runtime carries webkit2gtk, which is the webview Tauri renders in.
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+
+command: tex-viewer
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  # GPU access for the webview compositor. Without it webkit falls back to
+  # software rendering and the preview panel scrolls poorly.
+  - --device=dri
+  # The bundled Tectonic engine downloads its support files on the first
+  # compile and caches them. Without network, PDF mode works only once a
+  # system TeX is present.
+  - --share=network
+  # Documents live outside the sandbox and the app opens and saves them by
+  # absolute path (\input, \includegraphics and \bibliography resolve relative
+  # to the document's own directory, so a portal-only document handle is not
+  # enough - the engine has to read siblings the user never explicitly picked).
+  - --filesystem=home
+
+modules:
+  - name: tex-viewer
+    buildsystem: simple
+    build-commands:
+      - ar x tex-viewer.deb
+      - tar -xf data.tar.gz
+
+      - install -Dm755 usr/bin/tex-viewer /app/bin/tex-viewer
+      - install -Dm755 usr/bin/tex-viewer-tectonic /app/bin/tex-viewer-tectonic
+
+      # Flatpak requires the desktop file and icons to be named for the app ID.
+      # The deb names them "TeX Viewer.desktop" and tex-viewer.png, so both are
+      # renamed here and the Icon= key is repointed to match.
+      - install -Dm644 "usr/share/applications/TeX Viewer.desktop"
+        /app/share/applications/dev.joseph.texviewer.desktop
+      - desktop-file-edit --set-icon=dev.joseph.texviewer
+        /app/share/applications/dev.joseph.texviewer.desktop
+
+      - install -Dm644 usr/share/icons/hicolor/32x32/apps/tex-viewer.png
+        /app/share/icons/hicolor/32x32/apps/dev.joseph.texviewer.png
+      - install -Dm644 usr/share/icons/hicolor/128x128/apps/tex-viewer.png
+        /app/share/icons/hicolor/128x128/apps/dev.joseph.texviewer.png
+      - install -Dm644 usr/share/icons/hicolor/256x256@2/apps/tex-viewer.png
+        /app/share/icons/hicolor/256x256@2/apps/dev.joseph.texviewer.png
+
+      - install -Dm644 dev.joseph.texviewer.metainfo.xml
+        /app/share/metainfo/dev.joseph.texviewer.metainfo.xml
+
+      # The GUST font licence and the MIT terms both require the licence to
+      # travel with what it covers, so the licence set ships inside the sandbox
+      # exactly as it does in the deb and rpm.
+      - install -Dm644 "usr/lib/TeX Viewer/LICENSE" /app/share/tex-viewer/LICENSE
+      - install -Dm644 "usr/lib/TeX Viewer/NOTICE" /app/share/tex-viewer/NOTICE
+      - install -Dm644 "usr/lib/TeX Viewer/THIRD-PARTY-LICENSES.md"
+        /app/share/tex-viewer/THIRD-PARTY-LICENSES.md
+      - cp -r "usr/lib/TeX Viewer/LICENSES" /app/share/tex-viewer/LICENSES
+
+    sources:
+      - type: file
+        path: tex-viewer.deb
+      - type: file
+        path: dev.joseph.texviewer.metainfo.xml

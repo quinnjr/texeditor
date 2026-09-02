@@ -1,6 +1,7 @@
-target/
-node_modules/
 dist/
+node_modules/
+packaging/flatpak/tex-viewer.deb
 public/
 src-tauri/binaries/
+target/
 .worktrees/

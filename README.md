@@ -53,6 +53,7 @@ Download an installer from the [releases page](../../releases):
 | Debian, Ubuntu | `.deb` |
 | Fedora, RHEL, openSUSE | `.rpm` |
 | Other Linux | `.AppImage` |
+| Any Linux with Flatpak | `.flatpak` — `flatpak install ./dev.joseph.texviewer.flatpak` |
 
 macOS builds are unsigned unless signing secrets are configured, so the first
 launch needs **right-click → Open**.
@@ -84,6 +85,34 @@ The build fetches the Tectonic sidecar for the target triple first
 unverified compiler. Installers for all three platforms are produced by the
 `Release` workflow on a `v*` tag, since they cannot be cross-compiled from one
 host.
+
+Build the Flatpak (needs `flatpak` and `flatpak-builder`; wraps the `.deb`, so
+build that first):
+
+```sh
+pnpm tauri build --bundles deb
+./scripts/build-flatpak.sh              # build, install --user, emit the bundle
+./scripts/build-flatpak.sh --no-install # bundle only
+```
+
+The manifest grants `--share=network` because the bundled engine fetches its
+support files on the first compile, and `--filesystem=home` because `\input`,
+`\includegraphics` and `\bibliography` resolve against the document's own
+directory — a portal file handle only covers the file the user picked, not its
+siblings.
+
+If the window comes up blank or fails to start under Wayland, the webview is
+hitting a compositor/driver issue rather than an app bug. Force X11 for the
+sandbox:
+
+```sh
+flatpak override --user --socket=x11 \
+  --env=GDK_BACKEND=x11 --env=WEBKIT_DISABLE_DMABUF_RENDERER=1 \
+  dev.joseph.texviewer
+```
+
+(`--socket=x11` is needed as well as the env vars: the manifest ships
+`fallback-x11`, which grants the X socket only when Wayland is absent.)
 
 Regenerate the dependency notice after changing dependencies:
 

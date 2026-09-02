@@ -91,6 +91,13 @@ jobs:
           cargo test
           cargo clippy --all-targets -- -D warnings
 
+      - name: Install Flatpak toolchain
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub \
+            https://flathub.org/repo/flathub.flatpakrepo
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -120,6 +127,13 @@ jobs:
           includeUpdaterJson: false
           args: ${{ matrix.args }}
 
+      # Runs after tauri-action so the .deb it packages already exists. The
+      # Flatpak wraps that same .deb rather than rebuilding, so it cannot drift
+      # from the other Linux installers.
+      - name: Build Flatpak bundle
+        if: matrix.platform == 'ubuntu-22.04'
+        run: ./scripts/build-flatpak.sh --no-install
+
       - name: Upload installers as build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -132,3 +146,4 @@ jobs:
             src-tauri/target/**/release/bundle/dmg/*.dmg
             src-tauri/target/**/release/bundle/msi/*.msi
             src-tauri/target/**/release/bundle/nsis/*.exe
+            target/*.flatpak
