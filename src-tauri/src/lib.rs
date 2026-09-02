@@ -16,13 +16,51 @@ use tauri_plugin_dialog::DialogExt;
 
 /// Engines we know how to probe / invoke.
 ///
-/// All of these are TeX-family binaries that accept the exact same
-/// `-interaction` / `-halt-on-error` / `-output-directory` flags, which is what
-/// `run_engine_pass` below relies on. Deliberately excludes `tectonic`: it is
-/// detectable via `--version` but rejects every one of those flags (it wants
-/// `--outdir` and drives its own rerun loop), so advertising it in the engine
-/// picker would only hand the user a compile that always fails.
-const KNOWN_ENGINES: [&str; 3] = ["pdflatex", "xelatex", "lualatex"];
+/// `pdflatex` / `xelatex` / `lualatex` are TeX-family binaries taking the same
+/// `-interaction` / `-halt-on-error` / `-output-directory` flags. `tectonic`
+/// takes none of those — it wants `--outdir`, drives its own rerun loop and
+/// resolves its own bibliography — so it gets a separate arm in
+/// [`EngineKind`] rather than being pushed through the TeX-family path.
+///
+/// Tectonic is also the engine we *ship*: a bundled sidecar means a fresh
+/// install can produce a PDF without the user first installing a TeX
+/// distribution. It is listed last so a system TeX, which needs no network and
+/// carries the user's own packages, is preferred when one is present.
+const KNOWN_ENGINES: [&str; 4] = ["pdflatex", "xelatex", "lualatex", "tectonic"];
+
+/// How an engine wants to be driven.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EngineKind {
+    /// `-interaction=nonstopmode -halt-on-error -output-directory=…`, driven
+    /// through our own multi-pass + bibliography loop.
+    TexFamily,
+    /// One invocation that reruns internally and resolves its own bibliography.
+    Tectonic,
+}
+
+impl EngineKind {
+    fn of(engine: &str) -> Self {
+        if engine == "tectonic" {
+            EngineKind::Tectonic
+        } else {
+            EngineKind::TexFamily
+        }
+    }
+
+    /// Tectonic reruns internally, so driving it through our pass loop would
+    /// typeset the document up to `MAX_PASSES` times over.
+    fn max_passes(self) -> u32 {
+        match self {
+            EngineKind::TexFamily => MAX_PASSES,
+            EngineKind::Tectonic => 1,
+        }
+    }
+
+    /// Tectonic runs bibtex/biber itself as part of a single invocation.
+    fn drives_own_bibliography(self) -> bool {
+        self == EngineKind::Tectonic
+    }
+}
 
 /// Kill a single engine/bibliography pass if it hasn't finished within this long.
 const PASS_TIMEOUT: Duration = Duration::from_secs(60);
@@ -113,6 +151,17 @@ struct ProcRun {
 /// grant execute access to exactly the directory the engine lives in, which is
 /// what makes a TeX Live installed under `$HOME` work.
 fn resolve_program(name: &str) -> Option<PathBuf> {
+    // The bundled engine sits next to the app executable (Tauri drops
+    // `externalBin` sidecars there with the target triple stripped). Preferring
+    // it for `tectonic` specifically means an installed app never depends on
+    // the user happening to have Tectonic on PATH, while a system pdflatex is
+    // still found the normal way.
+    if name == "tectonic" {
+        if let Some(bundled) = bundled_sidecar(BUNDLED_ENGINE) {
+            return Some(bundled);
+        }
+    }
+
     let as_path = Path::new(name);
     if as_path.components().count() > 1 {
         return as_path.is_file().then(|| as_path.to_path_buf());
@@ -135,6 +184,23 @@ fn resolve_program(name: &str) -> Option<PathBuf> {
         }
         None
     })
+}
+
+/// Name of the Tectonic build we ship. Namespaced because sidecars are
+/// installed into `/usr/bin` on Linux, where a plain `tectonic` would collide
+/// with the distribution's own package.
+const BUNDLED_ENGINE: &str = "tex-viewer-tectonic";
+
+/// Path to a sidecar binary shipped beside the app executable, if it exists.
+fn bundled_sidecar(name: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let candidate = if cfg!(windows) {
+        dir.join(format!("{name}.exe"))
+    } else {
+        dir.join(name)
+    };
+    is_executable(&candidate).then_some(candidate)
 }
 
 fn is_executable(path: &Path) -> bool {
@@ -389,20 +455,38 @@ fn compile_env(doc_dir: Option<&Path>) -> Vec<(String, String)> {
 /// One `engine main.tex` pass in `work_dir`.
 fn run_engine_pass(
     engine_bin: &Path,
+    kind: EngineKind,
     work_dir: &Path,
     env: &[(String, String)],
     policy: &sandbox::Policy,
     timeout: Duration,
 ) -> std::io::Result<ProcRun> {
     let mut cmd = Command::new(engine_bin);
-    cmd.arg("-interaction=nonstopmode")
-        .arg("-halt-on-error")
-        // Belt to the sandbox's braces: `\write18` is arbitrary command
-        // execution, which is strictly worse than arbitrary file reads.
-        .arg("-no-shell-escape")
-        .arg(format!("-output-directory={}", work_dir.display()))
-        .arg("main.tex")
-        .current_dir(work_dir)
+    match kind {
+        EngineKind::TexFamily => {
+            cmd.arg("-interaction=nonstopmode")
+                .arg("-halt-on-error")
+                // Belt to the sandbox's braces: `\write18` is arbitrary command
+                // execution, which is strictly worse than arbitrary file reads.
+                .arg("-no-shell-escape")
+                .arg(format!("-output-directory={}", work_dir.display()))
+                .arg("main.tex");
+        }
+        EngineKind::Tectonic => {
+            // `--untrusted` is Tectonic's own hardening switch. Measured, it
+            // disables shell-escape but does NOT stop `\openin` from reading
+            // arbitrary files — so it is a supplement to the sandbox, never a
+            // substitute for it. `--keep-logs` puts main.log where the
+            // TeX-family path already expects to find it.
+            cmd.arg("--untrusted")
+                .arg("--keep-logs")
+                .arg("--print")
+                .arg("--outdir")
+                .arg(work_dir)
+                .arg("main.tex");
+        }
+    }
+    cmd.current_dir(work_dir)
         .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     run_bounded(cmd, timeout, Some(policy))
 }
@@ -554,9 +638,29 @@ fn compile_latex_blocking(
         return compile_failure(format!("failed to write main.tex: {e}"));
     }
 
+    let kind = EngineKind::of(&engine);
     let doc_dir = document_directory(doc_path.as_deref());
     let env = compile_env(doc_dir.as_deref());
-    let policy = sandbox::Policy::for_compile(&work_dir, doc_dir.as_deref(), &engine_bin);
+    let mut policy = sandbox::Policy::for_compile(&work_dir, doc_dir.as_deref(), &engine_bin);
+    if kind == EngineKind::Tectonic {
+        // Tectonic resolves packages from a remote bundle and caches them, so
+        // unlike a system TeX it needs its cache tree and a network egress.
+        // Granting that is only defensible because the filesystem policy is
+        // unchanged: the engine still cannot read anything outside the scratch
+        // and document directories, so there is nothing new for it to send.
+        // Documented in SECURITY.md.
+        policy.allow_network = true;
+        policy.read.extend(sandbox::network_resolution_paths());
+        policy.read_write.extend(sandbox::tectonic_cache_dirs());
+        // The cache tree may not exist yet on a first run, and Landlock drops
+        // rules for paths that are absent — which would deny the very
+        // directory Tectonic is about to create. Create it up front instead.
+        for dir in sandbox::tectonic_cache_dirs() {
+            if dir.parent().is_some_and(|p| p.is_dir()) {
+                let _ = std::fs::create_dir_all(&dir);
+            }
+        }
+    }
 
     let budget_deadline = Instant::now() + COMPILE_BUDGET;
     let mut full_log = String::new();
@@ -564,7 +668,7 @@ fn compile_latex_blocking(
     let mut last_ok = false;
     let mut bib_settled = false;
 
-    for pass in 1..=MAX_PASSES {
+    for pass in 1..=kind.max_passes() {
         let remaining = budget_deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             full_log.push_str(&format!(
@@ -576,7 +680,7 @@ fn compile_latex_blocking(
         }
 
         let pass_timeout = remaining.min(PASS_TIMEOUT);
-        let run = match run_engine_pass(&engine_bin, &work_dir, &env, &policy, pass_timeout) {
+        let run = match run_engine_pass(&engine_bin, kind, &work_dir, &env, &policy, pass_timeout) {
             Ok(run) => run,
             Err(e) => {
                 full_log.push_str(&format!(
@@ -606,7 +710,7 @@ fn compile_latex_blocking(
         // The bibliography pass has to happen after the engine has written the
         // .aux/.bcf that names the databases, and before the passes that
         // typeset the resulting .bbl.
-        if !bib_settled {
+        if !bib_settled && !kind.drives_own_bibliography() {
             bib_settled = true;
             if let Some(tool) = detect_bib_tool(&work_dir, doc_dir.as_deref()) {
                 let remaining = budget_deadline.saturating_duration_since(Instant::now());
@@ -982,6 +1086,50 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    // ---- bundled Tectonic engine ------------------------------------------
+
+    #[test]
+    fn tectonic_is_offered_but_ranked_below_a_system_tex() {
+        assert!(super::KNOWN_ENGINES.contains(&"tectonic"));
+        // A system TeX needs no network and carries the user's own packages, so
+        // it must win the default selection the frontend makes from this list.
+        let tectonic = super::KNOWN_ENGINES.iter().position(|e| *e == "tectonic").unwrap();
+        for system in ["pdflatex", "xelatex", "lualatex"] {
+            let idx = super::KNOWN_ENGINES.iter().position(|e| *e == system).unwrap();
+            assert!(idx < tectonic, "{system} must be offered before tectonic");
+        }
+    }
+
+    #[test]
+    fn engine_kind_separates_tectonic_from_the_tex_family() {
+        assert_eq!(super::EngineKind::of("tectonic"), super::EngineKind::Tectonic);
+        for system in ["pdflatex", "xelatex", "lualatex"] {
+            assert_eq!(super::EngineKind::of(system), super::EngineKind::TexFamily);
+        }
+    }
+
+    #[test]
+    fn tectonic_runs_once_and_resolves_its_own_bibliography() {
+        let t = super::EngineKind::Tectonic;
+        // Tectonic reruns internally; driving it through our pass loop would
+        // typeset the whole document up to MAX_PASSES times over.
+        assert_eq!(t.max_passes(), 1);
+        assert!(t.drives_own_bibliography());
+
+        let tex = super::EngineKind::TexFamily;
+        assert_eq!(tex.max_passes(), super::MAX_PASSES);
+        assert!(!tex.drives_own_bibliography());
+    }
+
+    #[test]
+    fn the_bundled_engine_cannot_collide_with_a_distro_package() {
+        // Sidecars are installed into /usr/bin on Linux. A file called plain
+        // `tectonic` there would conflict with the distribution's own package,
+        // so the shipped name must stay namespaced.
+        assert_ne!(super::BUNDLED_ENGINE, "tectonic");
+        assert!(super::BUNDLED_ENGINE.starts_with("tex-viewer-"));
+    }
+
     use super::*;
     use tauri::ipc::IpcResponse;
 
@@ -1468,6 +1616,38 @@ hello
             assert!(value.contains(&dir.path().display().to_string()));
             assert!(value.ends_with(KPSE_SEP), "{var} must keep kpathsea's defaults");
         }
+    }
+
+    #[test]
+    fn tectonic_is_offered_and_driven_differently_from_the_tex_family() {
+        // It is in the picker: the bundled engine is the reason a fresh
+        // install can compile at all.
+        assert!(KNOWN_ENGINES.contains(&"tectonic"));
+        // ...and last, so a system TeX — which needs no network and carries the
+        // user's own packages — wins when one is installed.
+        assert_eq!(*KNOWN_ENGINES.last().unwrap(), "tectonic");
+
+        assert_eq!(EngineKind::of("tectonic"), EngineKind::Tectonic);
+        for tex in ["pdflatex", "xelatex", "lualatex"] {
+            assert_eq!(EngineKind::of(tex), EngineKind::TexFamily, "{tex}");
+        }
+
+        // Tectonic reruns internally and resolves its own bibliography.
+        // Driving it through our loop would typeset the document five times
+        // over and run bibtex against files it already consumed.
+        assert_eq!(EngineKind::Tectonic.max_passes(), 1);
+        assert!(EngineKind::Tectonic.drives_own_bibliography());
+        assert_eq!(EngineKind::TexFamily.max_passes(), MAX_PASSES);
+        assert!(!EngineKind::TexFamily.drives_own_bibliography());
+    }
+
+    #[test]
+    fn the_bundled_engine_name_cannot_collide_with_a_system_package() {
+        // Sidecars are installed into /usr/bin on Linux. Shipping one called
+        // plain `tectonic` would fight the distribution's own package for the
+        // same path.
+        assert_ne!(BUNDLED_ENGINE, "tectonic");
+        assert!(BUNDLED_ENGINE.starts_with("tex-viewer-"));
     }
 
     #[test]

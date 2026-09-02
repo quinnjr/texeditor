@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "pnpm dev",
-    "beforeBuildCommand": "pnpm build"
+    "beforeBuildCommand": "node scripts/fetch-tectonic.mjs && pnpm build"
   },
   "app": {
     "windows": [
@@ -35,6 +35,64 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "publisher": "Joseph R. Quinn",
+    "copyright": "Copyright (c) 2026 Joseph R. Quinn",
+    "category": "Productivity",
+    "shortDescription": "Write LaTeX and see the page as it will print.",
+    "longDescription": "A desktop LaTeX viewer with the source on the left and the rendered document on the right. The live preview renders as you type with no compiler needed; the PDF view is a real LaTeX compile. A Tectonic engine is bundled, so a fresh install can produce a PDF without a separate TeX distribution -- an existing pdflatex, xelatex or lualatex is used in preference when present.",
+    "licenseFile": "../LICENSE",
+    "externalBin": [
+      "binaries/tex-viewer-tectonic"
+    ],
+    "resources": {
+      "../LICENSE": "LICENSE",
+      "../NOTICE": "NOTICE",
+      "../THIRD-PARTY-LICENSES.md": "THIRD-PARTY-LICENSES.md",
+      "../LICENSES/": "LICENSES/"
+    },
+    "linux": {
+      "deb": {
+        "section": "text",
+        "priority": "optional"
+      },
+      "rpm": {
+        "release": "1",
+        "epoch": 0
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "dmg": {
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        },
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        }
+      }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "languages": [
+          "English"
+        ]
+      },
+      "wix": {
+        "language": [
+          "en-US"
+        ]
+      }
+    }
   }
 }

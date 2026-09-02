@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Pinned Tectonic builds bundled as a sidecar so a fresh install can produce",
+    "a PDF without a system TeX distribution. Checksums were taken from the",
+    "upstream release assets and are verified on every fetch; a mismatch aborts",
+    "the build. To bump: change `version`, download each asset, and replace the",
+    "sha256 values with the new ones.",
+    "Tectonic is MIT licensed - see LICENSES/tectonic.LICENSE.",
+    "The shipped binary is renamed tex-viewer-tectonic: sidecars land in /usr/bin on Linux, and a file called `tectonic` there would collide with the distro's own package."
+  ],
+  "version": "0.17.0",
+  "baseUrl": "https://github.com/tectonic-typesetting/tectonic/releases/download",
+  "targets": {
+    "x86_64-unknown-linux-gnu": {
+      "asset": "tectonic-0.17.0-x86_64-unknown-linux-gnu.tar.gz",
+      "sha256": "1a715688baf591e650c8aeb160ae934e181685eecbb38b317de30b269ac5d606"
+    },
+    "aarch64-unknown-linux-gnu": {
+      "asset": "tectonic-0.17.0-aarch64-unknown-linux-musl.tar.gz",
+      "sha256": "b10954a95404f3ab2328d2fa59a5ebab8e657f893fab096f98be8db7c0c979b8",
+      "note": "statically linked musl build; runs on glibc systems too"
+    },
+    "x86_64-apple-darwin": {
+      "asset": "tectonic-0.17.0-x86_64-apple-darwin.tar.gz",
+      "sha256": "7c90ef5b6ddb1eb1937e4337add5237b79338e4b9676459fa91187d24d6cdf80"
+    },
+    "aarch64-apple-darwin": {
+      "asset": "tectonic-0.17.0-aarch64-apple-darwin.tar.gz",
+      "sha256": "a3f1cac7c5678f01661a92212f58480ae3b0634115d880dbc59e2953ded45667"
+    },
+    "x86_64-pc-windows-msvc": {
+      "asset": "tectonic-0.17.0-x86_64-pc-windows-msvc.zip",
+      "sha256": "f61ce51f0b0ade1015b7de7ef368541c5424e9756ecbd0d7af97d6d48030845f"
+    }
+  },
+  "binaryName": "tex-viewer-tectonic"
+}

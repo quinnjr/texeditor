@@ -93,6 +93,15 @@ pub struct Policy {
     /// Writable but not readable — somewhere to drop temp files without being
     /// able to read what other programs left behind.
     pub write_only: Vec<PathBuf>,
+    /// Whether the child may open TCP sockets.
+    ///
+    /// Off for a system TeX, which has every package it needs on disk, so the
+    /// obvious way to ship a file off the machine is closed. On only for
+    /// Tectonic, which fetches its packages from a remote bundle and cannot
+    /// work without egress. That is a narrower concession than it looks: the
+    /// filesystem rules are identical either way, so a document that gains
+    /// network still cannot read anything outside its own directory tree.
+    pub allow_network: bool,
 }
 
 impl Policy {
@@ -129,6 +138,7 @@ impl Policy {
             // insists on the system temp dir (mktex* helpers) may create files
             // there but must not be able to read other processes' leftovers.
             write_only: vec![std::env::temp_dir()],
+            allow_network: false,
         }
     }
 }
@@ -166,13 +176,15 @@ pub fn confine_current_thread(policy: &Policy) -> Status {
     let abi = ABI::V6;
 
     let build = || -> Result<landlock::RestrictionStatus, landlock::RulesetError> {
-        landlock::Ruleset::default()
+        let mut attr = landlock::Ruleset::default()
             .set_compatibility(CompatLevel::BestEffort)
-            .handle_access(AccessFs::from_all(abi))?
-            // No network rules are added, so the child gets no TCP at all —
-            // closing the other obvious way to ship a file off the machine.
-            .handle_access(AccessNet::BindTcp | AccessNet::ConnectTcp)?
-            .create()?
+            .handle_access(AccessFs::from_all(abi))?;
+        if !policy.allow_network {
+            // With no matching allow-rule added below, handling the access at
+            // all is what denies it outright.
+            attr = attr.handle_access(AccessNet::BindTcp | AccessNet::ConnectTcp)?;
+        }
+        attr.create()?
             .add_rules(landlock::path_beneath_rules(
                 &policy.read,
                 AccessFs::from_read(abi),
@@ -304,6 +316,45 @@ fn discover_texmf_trees() -> TexmfTrees {
 }
 
 /// `$XDG_CACHE_HOME`, or `$HOME/.cache`.
+/// The files a networked child needs in order to resolve a hostname and verify
+/// a TLS certificate. Granted only alongside [`Policy::allow_network`], so the
+/// system-TeX policy — which needs no network — never widens to include them.
+///
+/// Without these Tectonic does not fail gracefully: it panics inside its C
+/// bridge (`ttbc_input_open` -> `panic_cannot_unwind`) rather than reporting
+/// that it could not reach the bundle server.
+pub fn network_resolution_paths() -> Vec<PathBuf> {
+    [
+        "/etc/ssl",
+        "/etc/pki",
+        "/etc/ca-certificates",
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/resolv.conf",
+        "/etc/hosts",
+        "/etc/nsswitch.conf",
+        "/etc/gai.conf",
+        "/etc/services",
+    ]
+    .iter()
+    .map(PathBuf::from)
+    .collect()
+}
+
+/// Where Tectonic keeps its downloaded resource bundle. It must be read/write
+/// or every compile re-downloads, and the first compile cannot work at all.
+pub fn tectonic_cache_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(cache) = user_cache_dir() {
+        // Lowercase on Linux (XDG), capitalised on macOS.
+        dirs.push(cache.join("tectonic"));
+        dirs.push(cache.join("Tectonic"));
+    }
+    if let Some(data) = std::env::var_os("LOCALAPPDATA") {
+        dirs.push(PathBuf::from(data).join("TectonicProject").join("Tectonic"));
+    }
+    dirs
+}
+
 fn user_cache_dir() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
         let path = PathBuf::from(xdg);
@@ -316,6 +367,48 @@ fn user_cache_dir() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_compile_policy_has_no_network_by_default() {
+        let work = scratch();
+        let policy = Policy::for_compile(work.path(), None, std::path::Path::new("/usr/bin/pdflatex"));
+        // A system TeX has every package it needs on disk. Denying egress
+        // closes the obvious way to ship a file off the machine.
+        assert!(!policy.allow_network);
+    }
+
+    #[test]
+    fn the_networked_engine_gets_resolution_files_a_system_tex_never_does() {
+        let work = scratch();
+        let offline = Policy::for_compile(work.path(), None, std::path::Path::new("/usr/bin/pdflatex"));
+        let resolution = network_resolution_paths();
+        assert!(!resolution.is_empty());
+
+        // Without these Tectonic panics inside its C bridge rather than
+        // reporting that it could not reach the bundle server - but they must
+        // not be handed to an engine that has no business talking to the
+        // network.
+        for path in &resolution {
+            assert!(
+                !offline.read.contains(path),
+                "{} must not be readable by a non-networked compile",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn the_resolution_set_never_includes_the_secrets_the_policy_exists_to_hide() {
+        for path in network_resolution_paths() {
+            let s = path.to_string_lossy().to_string();
+            for secret in ["/etc/passwd", "/etc/shadow", "/etc/sudoers", "/root", "/home"] {
+                assert_ne!(s, secret);
+                assert!(!s.starts_with(&format!("{secret}/")), "{s} reaches {secret}");
+            }
+            // Granting /etc wholesale would defeat the point of listing files.
+            assert_ne!(s, "/etc");
+        }
+    }
+
     use super::*;
 
     /// True when `target` sits under one of the granted trees. Landlock rules
@@ -430,6 +523,42 @@ mod tests {
     /// uses in `lib.rs`.
     #[cfg(target_os = "linux")]
     #[test]
+    fn a_compile_policy_denies_the_network_by_default() {
+        let work = scratch();
+        let policy = Policy::for_compile(work.path(), None, Path::new("/usr/bin/pdflatex"));
+        // A system TeX has every package it needs on disk, so egress stays shut
+        // and the obvious way to ship a file off the machine is closed.
+        assert!(!policy.allow_network);
+    }
+
+    #[test]
+    fn resolver_and_tls_paths_are_not_granted_to_an_offline_compile() {
+        let work = scratch();
+        let policy = Policy::for_compile(work.path(), None, Path::new("/usr/bin/pdflatex"));
+        // These are only defensible for the one engine that must reach the
+        // network; the offline path must not quietly widen to include them.
+        for p in ["/etc/resolv.conf", "/etc/hosts", "/etc/ssl"] {
+            assert!(
+                !policy.read.iter().any(|granted| granted == Path::new(p)),
+                "offline compile should not be granted {p}"
+            );
+        }
+        // And they are exactly what the networked engine does get.
+        let networked = network_resolution_paths();
+        for p in ["/etc/resolv.conf", "/etc/hosts", "/etc/ssl"] {
+            assert!(networked.iter().any(|granted| granted == Path::new(p)), "{p}");
+        }
+    }
+
+    #[test]
+    fn the_tectonic_cache_is_never_a_place_secrets_live() {
+        for dir in tectonic_cache_dirs() {
+            let s = dir.to_string_lossy().to_lowercase();
+            assert!(s.contains("tectonic"), "unexpectedly broad cache grant: {dir:?}");
+        }
+    }
+
+    #[test]
     fn landlock_blocks_the_reads_the_policy_does_not_grant() {
         let work = scratch();
         let allowed = work.path().join("allowed.txt");
@@ -439,6 +568,7 @@ mod tests {
             read: Vec::new(),
             read_write: vec![work.path().to_path_buf()],
             write_only: Vec::new(),
+            allow_network: false,
         };
 
         let outcome = std::thread::scope(|scope| {

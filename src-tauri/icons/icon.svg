@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    A sheet on the desk, which is what the whole app is arranged around, with
+    the TeX wordmark set on it the way TeX sets its own name: Latin Modern with
+    the E dropped and kerned in. Non-repro blue marks the gutter, because the
+    chrome is annotation and never part of the page.
+  -->
+  <defs>
+    <linearGradient id="desk" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a2027"/>
+      <stop offset="1" stop-color="#0d1114"/>
+    </linearGradient>
+    <filter id="lift" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#desk)"/>
+
+  <!-- the sheet, at the proportions of a Letter page -->
+  <g filter="url(#lift)">
+    <rect x="118" y="92" width="276" height="340" rx="6" fill="#f8f6f0"/>
+  </g>
+
+  <!-- non-repro blue gutter rule: the margin mark that never prints -->
+  <rect x="160" y="92" width="2" height="340" fill="#8fc1e3" opacity="0.5"/>
+
+  <!-- TeX, Latin Modern proportions, E dropped -->
+  <text x="266" y="278" font-size="104" text-anchor="middle" fill="#16161a"
+        font-family="Latin Modern Roman, Computer Modern, Georgia, serif">T<tspan
+        dy="0.22em" dx="-0.06em">E</tspan><tspan dy="-0.22em" dx="-0.06em">X</tspan></text>
+
+  <!-- three ruled lines of body text below the wordmark -->
+  <g fill="#16161a" opacity="0.22">
+    <rect x="176" y="342" width="160" height="7" rx="3.5"/>
+    <rect x="176" y="364" width="182" height="7" rx="3.5"/>
+    <rect x="176" y="386" width="118" height="7" rx="3.5"/>
+  </g>
+</svg>
