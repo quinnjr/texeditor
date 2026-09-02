@@ -5,12 +5,10 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Manual runs build the installers and upload them as workflow artifacts but
+  # publish nothing: `tagName` below resolves to '' when the ref is not a tag,
+  # which is what tells tauri-action to skip release creation.
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Build the installers but do not publish a release'
-        type: boolean
-        default: true
 
 permissions:
   contents: write
@@ -37,6 +35,29 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+
+      # Artifact filenames come from tauri.conf.json's version, not from the
+      # tag. Without this, tagging v0.2.0 without bumping the manifests
+      # publishes a v0.2.0 release full of files named 0.1.0 - and the three
+      # version fields can drift from each other just as silently. Runs before
+      # anything expensive so a mismatch costs seconds, not a full matrix build.
+      - name: Tag and manifest versions must agree
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          tauri=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' src-tauri/tauri.conf.json)
+          npm=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' package.json)
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml)
+          tag="${GITHUB_REF_NAME#v}"
+          echo "tag=$tag tauri=$tauri npm=$npm cargo=$cargo"
+          if [ -z "$tauri" ] || [ -z "$npm" ] || [ -z "$cargo" ]; then
+            echo "::error::could not read a version field - did a manifest's formatting change?"
+            exit 1
+          fi
+          if [ "$tauri" != "$tag" ] || [ "$npm" != "$tag" ] || [ "$cargo" != "$tag" ]; then
+            echo "::error::tag $GITHUB_REF_NAME disagrees with the manifests (tauri.conf.json=$tauri package.json=$npm Cargo.toml=$cargo). Bump all three to $tag, or retag."
+            exit 1
+          fi
 
       # 22.04 rather than 24.04: the deb it produces links against the older
       # glibc/webkit, so it installs on both. Building on 24.04 would silently
