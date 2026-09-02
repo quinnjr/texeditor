@@ -1,0 +1,77 @@
+name: CI
+
+# The checks here are repo-level invariants, not per-platform packaging, so
+# they belong on every push and pull request rather than only at tag time.
+# Before this existed, `release.yml` was the only workflow and fired only on
+# `v*` tags: the first sign that the licence notice had gone stale, or that a
+# test had broken, was a failed release with the tag already pushed.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # tauri-build resolves the sidecar path at compile time, so the Rust
+      # checks below need the binary present even though nothing is bundled.
+      - name: Fetch bundled Tectonic engine
+        run: node scripts/fetch-tectonic.mjs
+
+      - name: Verify the third-party notice is current
+        run: |
+          node scripts/gen-third-party.mjs
+          if ! git diff --quiet -- THIRD-PARTY-LICENSES.md; then
+            echo "::error::THIRD-PARTY-LICENSES.md is stale. Run 'pnpm run licenses' and commit the result."
+            git diff -- THIRD-PARTY-LICENSES.md | head -60
+            exit 1
+          fi
+
+      - run: pnpm test
+      - run: pnpm exec svelte-check --threshold error
+
+      - name: Rust checks
+        working-directory: src-tauri
+        run: |
+          cargo test
+          cargo clippy --all-targets -- -D warnings
+
+      # The macOS leg of the release has failed on dead code that only exists
+      # off Linux. Checking that target here catches it on the PR instead of
+      # after a tag is pushed.
+      - name: Rust checks (macOS target)
+        working-directory: src-tauri
+        run: |
+          rustup target add x86_64-apple-darwin
+          node ../scripts/fetch-tectonic.mjs --target x86_64-apple-darwin
+          cargo clippy --target x86_64-apple-darwin --all-targets -- -D warnings
+
+      - name: Shell scripts parse
+        run: bash -n scripts/build-flatpak.sh

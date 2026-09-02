@@ -86,8 +86,8 @@ unverified compiler. Installers for all three platforms are produced by the
 `Release` workflow on a `v*` tag, since they cannot be cross-compiled from one
 host.
 
-Build the Flatpak (needs `flatpak` and `flatpak-builder`; wraps the `.deb`, so
-build that first):
+Build the Flatpak (needs `flatpak`, plus either Flathub's `org.flatpak.Builder`
+(preferred) or a host `flatpak-builder`; wraps the `.deb`, so build that first):
 
 ```sh
 pnpm tauri build --bundles deb
@@ -117,7 +117,7 @@ flatpak override --user --socket=x11 \
 Regenerate the dependency notice after changing dependencies:
 
 ```sh
-pnpm licenses     # rewrites THIRD-PARTY-LICENSES.md; CI fails if it is stale
+pnpm run licenses # rewrites THIRD-PARTY-LICENSES.md; CI fails if it is stale
 ```
 
 Frontend-only checks:
