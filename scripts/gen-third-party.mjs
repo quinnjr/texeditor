@@ -17,13 +17,19 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
+// On Windows `pnpm` is a .cmd shim, and execFileSync does not resolve those
+// without a shell - it fails with ENOENT, which is what broke the Windows
+// runner. Naming the shim explicitly is safer than `shell: true`, which would
+// put the arguments through cmd.exe's parsing rules.
+const PNPM = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+
 function sh(cmd, args, cwd = ROOT) {
   return execFileSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 }
 
 /** Runtime npm dependencies, deduped by name. */
 function npmPackages() {
-  const raw = JSON.parse(sh('pnpm', ['licenses', 'list', '--json', '--prod']));
+  const raw = JSON.parse(sh(PNPM, ['licenses', 'list', '--json', '--prod']));
   const out = new Map();
   for (const [license, pkgs] of Object.entries(raw)) {
     for (const p of pkgs) {
@@ -35,7 +41,21 @@ function npmPackages() {
       });
     }
   }
-  return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const resolved = [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
+
+  // Without an installed node_modules, `pnpm licenses` still exits 0 but reports
+  // every package as "Unknown" - which would quietly replace a correct notice
+  // with a worthless one. A licence notice that has lost its licences is worse
+  // than no regeneration at all, so refuse to write it.
+  const unknown = resolved.filter((p) => /^unknown$/i.test(p.license));
+  if (unknown.length > 0) {
+    throw new Error(
+      `pnpm reported no licence for ${unknown.length}/${resolved.length} packages ` +
+        `(${unknown.slice(0, 3).map((p) => p.name).join(', ')}...). ` +
+        'Run `pnpm install` first - the notice was NOT rewritten.'
+    );
+  }
+  return resolved;
 }
 
 /**

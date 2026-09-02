@@ -94,7 +94,12 @@ jobs:
       - name: Fetch bundled Tectonic engine
         run: node scripts/fetch-tectonic.mjs --target ${{ matrix.target }}
 
+      # A repo-level invariant, identical on every runner - checking it once is
+      # the whole signal, and running it on all four only multiplied the ways it
+      # could break (it did: pnpm is a .cmd shim on Windows and could not be
+      # spawned at all).
       - name: Verify the third-party notice is current
+        if: matrix.platform == 'ubuntu-22.04'
         shell: bash
         run: |
           node scripts/gen-third-party.mjs
@@ -112,12 +117,16 @@ jobs:
           cargo test
           cargo clippy --all-targets -- -D warnings
 
+      # Flathub's org.flatpak.Builder, not the distro flatpak-builder: 22.04's
+      # is old enough to invoke `appstream-compose`, which current SDKs no
+      # longer ship, and the build then dies after compiling everything.
       - name: Install Flatpak toolchain
         if: matrix.platform == 'ubuntu-22.04'
         run: |
-          sudo apt-get install -y flatpak flatpak-builder
+          sudo apt-get install -y flatpak
           flatpak remote-add --user --if-not-exists flathub \
             https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive flathub org.flatpak.Builder
 
       - uses: tauri-apps/tauri-action@v0
         env:

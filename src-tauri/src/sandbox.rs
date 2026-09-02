@@ -92,6 +92,14 @@ pub struct Policy {
     pub read_write: Vec<PathBuf>,
     /// Writable but not readable — somewhere to drop temp files without being
     /// able to read what other programs left behind.
+    ///
+    /// Only the Landlock backend reads this, so off Linux it is dead in the
+    /// library and `-D warnings` fails the build (it did, on both macOS
+    /// runners). `allow` rather than `expect`: the unit tests *do* read it on
+    /// every platform, so under `--all-targets` an expectation is fulfilled in
+    /// the lib target and unfulfilled in the test target, which is itself an
+    /// error.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub write_only: Vec<PathBuf>,
     /// Whether the child may open TCP sockets.
     ///
@@ -146,6 +154,10 @@ impl Policy {
 /// Result of installing a [`Policy`] on the calling thread.
 pub enum Status {
     /// The kernel is enforcing the policy.
+    ///
+    /// Constructed only by the Landlock backend; see the note on
+    /// `Policy::write_only` for why this is `allow` and not `expect`.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Enforced,
     /// The policy is not (or only partly) in force; the reason is meant to be
     /// surfaced to the user, since it means the compile is running unconfined.

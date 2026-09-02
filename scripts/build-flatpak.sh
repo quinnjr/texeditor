@@ -17,9 +17,26 @@ REPO_DIR="$ROOT/target/flatpak-repo"
 install_bundle=1
 [[ "${1:-}" == "--no-install" ]] && install_bundle=0
 
-for tool in flatpak flatpak-builder ar; do
+for tool in flatpak ar; do
   command -v "$tool" >/dev/null || { echo "error: $tool is not installed" >&2; exit 1; }
 done
+
+# Prefer Flathub's org.flatpak.Builder over a distro flatpak-builder. Distro
+# packages lag: Ubuntu 22.04's is old enough that it invokes `appstream-compose`,
+# a binary current SDKs no longer ship, and the build dies with
+# "bwrap: execvp appstream-compose: No such file or directory" only *after*
+# compiling everything. The Flathub build tracks the SDK it runs against.
+if flatpak info org.flatpak.Builder >/dev/null 2>&1; then
+  builder=(flatpak run org.flatpak.Builder)
+  echo "==> builder: org.flatpak.Builder (Flathub)"
+elif command -v flatpak-builder >/dev/null; then
+  builder=(flatpak-builder)
+  echo "==> builder: host flatpak-builder $(flatpak-builder --version 2>/dev/null | head -1)"
+  echo "    (install org.flatpak.Builder from Flathub if appstream-compose fails)"
+else
+  echo "error: neither org.flatpak.Builder nor flatpak-builder is available" >&2
+  exit 1
+fi
 
 # The deb is the input, so a stale one would silently ship yesterday's binary.
 # Take the newest and print what was chosen.
@@ -47,7 +64,7 @@ rm -rf "$BUILD_DIR" "$REPO_DIR"
 args=(--force-clean --repo="$REPO_DIR")
 (( install_bundle )) && args+=(--user --install)
 
-flatpak-builder "${args[@]}" "$BUILD_DIR" "$FLATPAK_DIR/$APP_ID.yml"
+"${builder[@]}" "${args[@]}" "$BUILD_DIR" "$FLATPAK_DIR/$APP_ID.yml"
 
 out="$ROOT/target/$APP_ID.flatpak"
 flatpak build-bundle "$REPO_DIR" "$out" "$APP_ID"
