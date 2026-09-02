@@ -1,0 +1,692 @@
+<!-- Right panel: rendered output (live HTML/KaTeX or compiled PDF). OWNER: preview agent. -->
+<script lang="ts">
+  import { onDestroy } from 'svelte';
+  import { doc, ui, build } from './stores.svelte';
+  import { renderLatex } from './preview/render';
+  import { effectiveScale, loadPdf, type PdfHandle } from './preview/pdf';
+
+  let renderedHtml = $state('<div class="tex-doc-root"></div>');
+  let mathCount = $state(0);
+  let wordCount = $state(0);
+  let logCopied = $state(false);
+
+  let contentEl: HTMLElement | undefined = $state();
+  let debounceHandle: ReturnType<typeof setTimeout> | undefined;
+
+  function doRender() {
+    const result = renderLatex(doc.source);
+    renderedHtml = result.html;
+    mathCount = result.mathCount;
+  }
+
+  $effect(() => {
+    // touch doc.source so this effect re-runs whenever it changes
+    const _src = doc.source;
+    if (debounceHandle) clearTimeout(debounceHandle);
+    debounceHandle = setTimeout(() => {
+      doRender();
+    }, 150);
+    return () => {
+      if (debounceHandle) clearTimeout(debounceHandle);
+    };
+  });
+
+  // Recompute the word count whenever the rendered HTML (and thus the DOM)
+  // changes *or* the live pane is (re)mounted.
+  //
+  // Tracking `contentEl` matters for the same reason it does for `pagesEl` in the
+  // PDF loader below: the shell lives inside the {#if ui.mode === 'live'} branch,
+  // and `ui.mode` is restored from localStorage, so a session that ended in PDF
+  // mode reopens with the branch unmounted. Reading `contentEl` only inside the
+  // queueMicrotask callback would not register it as a dependency — by the time
+  // that callback runs Svelte has cleared the active reaction — so switching back
+  // to Live would never re-run this and the footer would sit at "0 words" until
+  // the next keystroke.
+  $effect(() => {
+    void renderedHtml;
+    const el = contentEl;
+    if (!el) return;
+    queueMicrotask(() => {
+      const words = visibleText(el).trim().split(/\s+/).filter(Boolean);
+      wordCount = words.length;
+    });
+  });
+
+  /**
+   * Text a reader actually sees, for the word count.
+   *
+   * `textContent` is not that: KaTeX renders every formula twice — a visually
+   * hidden MathML twin for screen readers (`.katex-mathml`, whose
+   * `<annotation encoding="application/x-tex">` node carries the *raw TeX
+   * source*, backslashes and all) and an `aria-hidden` pile of glyph spans that
+   * is the part you see. Reading `textContent` therefore counted the source of
+   * every formula plus its rendered glyphs as "words", which on a math-heavy
+   * document inflated the count several-fold and made it meaningless.
+   *
+   * Math is dropped entirely rather than glyph-counted: the visible spans
+   * tokenise into fragments ("x", "2", "+") that are not words in any useful
+   * sense, and the footer already reports formulas separately as math blocks.
+   * So the number means "words of prose", which is what someone writing a paper
+   * is asking for.
+   *
+   * Works on a clone so the live DOM the user is looking at is never touched.
+   */
+  const HIDDEN_FROM_READERS =
+    '.katex, .katex-mathml, annotation, math, script, style, [aria-hidden="true"], [hidden]';
+
+  /**
+   * Tags that start a new visual line. `textContent` concatenates with no
+   * separator, so "…positive time.</p><p>Here…" would otherwise read as the
+   * single token "time.Here" and lose a word at every block boundary.
+   */
+  const BLOCK_LEVEL =
+    'p, div, li, dt, dd, tr, td, th, h1, h2, h3, h4, h5, h6, blockquote, pre, figure, figcaption, table, ul, ol, dl, br, hr';
+
+  function visibleText(root: HTMLElement): string {
+    const clone = root.cloneNode(true) as HTMLElement;
+    for (const el of clone.querySelectorAll(HIDDEN_FROM_READERS)) el.remove();
+    for (const el of clone.querySelectorAll(BLOCK_LEVEL)) el.before(document.createTextNode(' '));
+    return clone.textContent ?? '';
+  }
+
+  // ---- PDF mode ---------------------------------------------------------
+  // Rendered to <canvas> via pdf.js rather than handed to an <iframe>: the app
+  // runs on webkit2gtk, which has no built-in PDF viewer, so an iframe would
+  // show nothing at all.
+
+  const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+
+  let pagesEl: HTMLElement | undefined = $state();
+  let pdfScrollEl: HTMLElement | undefined = $state();
+  let zoom = $state(1);
+  let pageCount = $state(0);
+  /** Width of page 1 in PDF points, for the true-scale zoom readout. */
+  let naturalWidth = $state(0);
+  let pdfLoading = $state(false);
+  let pdfError = $state<string | null>(null);
+  let availableWidth = $state(0);
+
+  let handle: PdfHandle | null = null;
+  /** Bumped on every load so a slow load can't clobber a newer one. */
+  let loadToken = 0;
+
+  async function disposeHandle() {
+    const current = handle;
+    handle = null;
+    pageCount = 0;
+    naturalWidth = 0;
+    if (current) await current.destroy();
+  }
+
+  function zoomIn() {
+    const next = ZOOM_STEPS.find((z) => z > zoom + 1e-6);
+    if (next !== undefined) zoom = next;
+  }
+
+  function zoomOut() {
+    const lower = ZOOM_STEPS.filter((z) => z < zoom - 1e-6);
+    if (lower.length > 0) zoom = lower[lower.length - 1];
+  }
+
+  function zoomReset() {
+    zoom = 1;
+  }
+
+  // Track the width the pages may occupy, so "fit width" actually fits.
+  $effect(() => {
+    const el = pdfScrollEl;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        // Subtract the gutter the CSS pads the page column with.
+        availableWidth = Math.max(0, entry.contentRect.width - 32);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  });
+
+  // Load whenever the compiled PDF changes *or* the page container is rebound.
+  //
+  // Tracking `pagesEl` matters: the container lives inside an {#if} branch, so
+  // switching Live -> PDF -> Live -> PDF destroys and recreates it. Depending on
+  // build.pdfUrl alone, the second visit would leave the canvases orphaned in a
+  // detached div and the panel would come up blank.
+  //
+  // Deliberately does *not* read availableWidth/zoom, so resizing and zooming
+  // re-rasterise through the effect below without re-parsing the document.
+  $effect(() => {
+    const url = build.pdfUrl;
+    const container = pagesEl;
+    const token = ++loadToken;
+
+    if (!url || !container) {
+      pdfLoading = false;
+      // Only a genuinely absent document resets the error. Clearing it just
+      // because the container unmounted would remount the branch, retry, fail
+      // and unmount again — an endless flip-flop.
+      if (!url) pdfError = null;
+      void disposeHandle();
+      return;
+    }
+
+    pdfLoading = true;
+    pdfError = null;
+
+    (async () => {
+      await disposeHandle();
+      if (token !== loadToken) return;
+      try {
+        const next = await loadPdf(url, container);
+        if (token !== loadToken) {
+          await next.destroy();
+          return;
+        }
+        handle = next;
+        pageCount = next.pageCount;
+        naturalWidth = next.naturalWidth;
+      } catch (err) {
+        if (token !== loadToken) return;
+        pdfError = err instanceof Error ? err.message : String(err);
+      } finally {
+        if (token === loadToken) pdfLoading = false;
+      }
+    })();
+  });
+
+  // What the zoom control displays: the scale pdf.js is actually rendering at,
+  // as a percentage of the PDF's natural size.
+  //
+  // `zoom` is a multiplier on *fit-to-width*, so showing `zoom * 100` claimed
+  // "100%" while a Letter page stretched across a wide pane was really being
+  // drawn at ~260% — the one number in a PDF viewer everybody reads as "actual
+  // size". Deriving it from the same formula pdf.ts renders with keeps the
+  // readout true, and 100% now means 100%. (Page 1's width stands in for the
+  // document: mixed-size pages are vanishingly rare in LaTeX output.)
+  // Before the document is measured (naturalWidth 0) effectiveScale() falls back
+  // to the raw multiplier, so the control still reads sensibly while loading.
+  const displayScale = $derived(effectiveScale(naturalWidth, availableWidth, zoom));
+
+  // Rasterise (and re-rasterise) at the current width and zoom. Reads only
+  // pageCount / availableWidth / zoom — never writes them — so it settles.
+  $effect(() => {
+    const pages = pageCount;
+    const width = availableWidth;
+    const z = zoom;
+    if (pages === 0 || width === 0) return;
+
+    const current = handle;
+    if (!current) return;
+
+    let cancelled = false;
+    current.draw({ availableWidth: width, zoom: z }).then(
+      () => {
+        // A redraw that succeeds clears whatever the last one complained about.
+        // Without this a single transient failure (a cancelled render, a missing
+        // font file) pinned the red banner to the panel for the rest of the
+        // session, over pages that were rendering perfectly well.
+        if (!cancelled) pdfError = null;
+      },
+      (err) => {
+        if (cancelled) return;
+        pdfError = err instanceof Error ? err.message : String(err);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  onDestroy(() => {
+    if (debounceHandle) clearTimeout(debounceHandle);
+    loadToken++;
+    void disposeHandle();
+  });
+
+  async function copyLog() {
+    try {
+      await navigator.clipboard.writeText(build.log);
+      logCopied = true;
+      setTimeout(() => (logCopied = false), 1500);
+    } catch {
+      // clipboard API unavailable; nothing more we can do
+    }
+  }
+
+  function logTail(log: string, lines = 60): string {
+    const all = log.split('\n');
+    if (all.length <= lines) return log;
+    return all.slice(-lines).join('\n');
+  }
+</script>
+
+<div class="flex h-full w-full flex-col overflow-hidden bg-surface-alt text-fg">
+  {#if ui.mode === 'live'}
+    <div class="tex-preview-scroll min-h-0 flex-1 overflow-auto">
+      <div class="tex-preview-shell" bind:this={contentEl}>
+        {@html renderedHtml}
+      </div>
+    </div>
+    <footer
+      class="mark flex h-7 shrink-0 items-center gap-4 border-t border-edge bg-surface px-4 text-fg-muted"
+    >
+      <span>{wordCount} {wordCount === 1 ? 'word' : 'words'}</span>
+      <span>{mathCount} {mathCount === 1 ? 'math block' : 'math blocks'}</span>
+    </footer>
+  {:else}
+    <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+      {#if build.error}
+        <div class="flex h-full flex-col gap-3 overflow-auto p-4">
+          <div class="flex items-center gap-3">
+            <span class="text-sm font-semibold text-danger">Compilation failed</span>
+            <button
+              class="ml-auto rounded border border-edge bg-surface px-2 py-1 text-xs text-fg hover:bg-surface-alt"
+              onclick={copyLog}
+            >
+              {logCopied ? 'Copied' : 'Copy log'}
+            </button>
+          </div>
+          <p class="text-sm text-fg">{build.error}</p>
+          <pre
+            class="flex-1 overflow-auto rounded border border-edge bg-surface p-3 font-mono text-xs whitespace-pre-wrap text-fg"
+          >{logTail(build.log)}</pre>
+        </div>
+      {:else if build.pdfUrl}
+        <div class="mark flex h-8 shrink-0 items-center gap-1 border-b border-edge bg-surface px-2 text-fg-muted">
+          <button
+            class="rounded px-2 py-0.5 text-fg-muted hover:bg-surface-alt hover:text-fg disabled:opacity-40"
+            onclick={zoomOut}
+            disabled={zoom <= ZOOM_STEPS[0]}
+            title="Zoom out"
+            aria-label="Zoom out">&minus;</button
+          >
+          <button
+            class="min-w-[3.5rem] rounded px-2 py-0.5 tabular-nums text-fg-muted hover:bg-surface-alt hover:text-fg"
+            onclick={zoomReset}
+            title="Rendering at {Math.round(displayScale * 100)}% of actual size — click to fit the page to the panel width"
+            >{Math.round(displayScale * 100)}%</button
+          >
+          <button
+            class="rounded px-2 py-0.5 text-fg-muted hover:bg-surface-alt hover:text-fg disabled:opacity-40"
+            onclick={zoomIn}
+            disabled={zoom >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}
+            title="Zoom in"
+            aria-label="Zoom in">+</button
+          >
+          <span class="ml-auto text-fg-muted">
+            {pageCount} {pageCount === 1 ? 'page' : 'pages'}
+          </span>
+        </div>
+        {#if pdfError}
+          <div class="shrink-0 border-b border-edge bg-surface px-3 py-2 text-xs">
+            <span class="font-semibold text-danger">Could not display the PDF.</span>
+            <span class="text-fg-muted">{pdfError}</span>
+          </div>
+        {/if}
+        <div class="min-h-0 flex-1 overflow-auto" bind:this={pdfScrollEl}>
+          <div class="tex-pdf-pages" bind:this={pagesEl}></div>
+        </div>
+      {:else}
+        <div class="flex h-full items-center justify-center text-sm text-fg-muted">
+          No PDF yet. Compile the document to see output here.
+        </div>
+      {/if}
+      {#if build.compiling || pdfLoading}
+        <div class="absolute inset-0 flex items-center justify-center bg-bg/60 backdrop-blur-sm">
+          <div class="flex flex-col items-center gap-3">
+            <div class="tex-spinner"></div>
+            <span class="text-sm text-fg-muted">{build.compiling ? 'Compiling…' : 'Rendering…'}</span>
+          </div>
+        </div>
+      {/if}
+    </div>
+    <footer
+      class="mark flex h-7 shrink-0 items-center gap-4 border-t border-edge bg-surface px-4 text-fg-muted"
+    >
+      <span
+        >{build.compiling
+          ? 'Compiling…'
+          : build.error
+            ? 'Compile failed'
+            : pdfError
+              ? 'Render failed'
+              : build.pdfUrl
+                ? 'PDF output'
+                : 'No PDF yet'}</span
+      >
+    </footer>
+  {/if}
+</div>
+
+<style>
+  .tex-spinner {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 9999px;
+    border: 3px solid var(--app-border);
+    border-top-color: var(--app-accent);
+    animation: tex-spin 0.8s linear infinite;
+  }
+
+  @keyframes tex-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .tex-pdf-pages {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    min-width: min-content;
+  }
+
+  :global(.tex-pdf-page) {
+    display: block;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 0.2), 0 6px 18px rgb(0 0 0 / 0.14);
+    border-radius: 2px;
+  }
+
+  /* The live view renders on the same sheet the compiled PDF is shown on
+     (.tex-pdf-page above): same stock, same shadow, same corner. Toggling
+     Live/PDF then swaps how the page is rendered rather than swapping the
+     page for a differently-styled web document. */
+  .tex-preview-shell {
+    background: var(--app-paper);
+    box-shadow:
+      0 1px 3px rgb(0 0 0 / 0.2),
+      0 6px 18px rgb(0 0 0 / 0.14);
+    border-radius: 2px;
+    /* True Letter proportions at 96dpi: an 8.5in sheet (51rem) with LaTeX's
+       1in margins (6rem), leaving a 6.5in text block. The live sheet and the
+       rasterised PDF page then carry the same measure at the same scale, so
+       switching between them barely moves a line. */
+    width: min(51rem, 100%);
+    margin: 0 auto;
+    padding: 6rem 6rem 6.5rem;
+  }
+
+  /* Desk showing on both sides is what makes the sheet read as a sheet, so
+     the gutter is on the scroller and never collapses. */
+  .tex-preview-scroll {
+    padding: 1.75rem 2rem 3rem;
+  }
+
+  @media (max-width: 48rem) {
+    .tex-preview-scroll {
+      padding: 0.875rem 0.875rem 1.5rem;
+    }
+    .tex-preview-shell {
+      padding: 2rem 1.75rem 2.5rem;
+    }
+  }
+
+  /* ---- Rendered-document typography ---------------------------------
+     The document body is injected via {@html}, so Svelte's normal scoped
+     styles can't reach it - everything below is wrapped in :global() and
+     namespaced under .tex-doc-root to keep it from leaking into the rest
+     of the app shell.                                                   */
+  :global(.tex-doc-root) {
+    font-family: var(--app-font-serif);
+    font-size: 1.0625rem;
+    line-height: 1.48;
+    color: var(--app-ink);
+    font-kerning: normal;
+    font-variant-ligatures: common-ligatures;
+  }
+
+  /* LaTeX's \maketitle: centred, no rule under it, generous air below. */
+  :global(.tex-title-block) {
+    text-align: center;
+    margin: 0 0 2.75rem;
+  }
+  :global(.tex-title) {
+    font-size: 1.65rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin: 0 0 0.9rem;
+    letter-spacing: -0.005em;
+  }
+  :global(.tex-author) {
+    font-size: 1.0625rem;
+    color: var(--app-ink);
+    margin: 0 0 0.3rem;
+  }
+  :global(.tex-date) {
+    font-size: 1.0625rem;
+    color: var(--app-ink);
+  }
+
+  /* Headings follow LaTeX's own article class: bold, unruled, sized close
+     to the body, with the space above doing the separating. The section
+     number is part of the document, so it is set in ink like everything
+     else on the page — not in the chrome's blue. */
+  :global(.tex-heading) {
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 1.9em 0 0.55em;
+    scroll-margin-top: 1rem;
+    color: var(--app-ink);
+  }
+  :global(.tex-heading:first-child) {
+    margin-top: 0;
+  }
+  :global(.tex-section) {
+    font-size: 1.3rem;
+  }
+  :global(.tex-subsection) {
+    font-size: 1.13rem;
+  }
+  :global(.tex-subsubsection) {
+    font-size: 1.02rem;
+  }
+  :global(.tex-secnum) {
+    margin-right: 0.6em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* LaTeX separates paragraphs by indenting the next one, not by leading a
+     gap between them. The first paragraph after a heading is flush. */
+  :global(.tex-p) {
+    margin: 0 0 0.9em;
+    text-align: justify;
+    hyphens: auto;
+  }
+  /* Between two consecutive paragraphs the gap closes and the indent takes
+     over. Around anything else — a list, a display, a table — the gap
+     stays, exactly as LaTeX leads them. Without :has() support this simply
+     falls back to gap-and-indent, which is a compromise, not a break. */
+  :global(.tex-p:has(+ .tex-p)) {
+    margin-bottom: 0;
+  }
+  :global(.tex-p + .tex-p) {
+    text-indent: 1.5em;
+  }
+  :global(.tex-heading + .tex-p) {
+    text-indent: 0;
+  }
+
+  :global(.tex-list) {
+    margin: 0 0 1em;
+    padding-left: 1.5em;
+  }
+  :global(.tex-ul) {
+    list-style: disc;
+  }
+  :global(.tex-ol) {
+    list-style: decimal;
+  }
+  :global(.tex-li) {
+    margin: 0.25em 0;
+  }
+  :global(.tex-li > .tex-p:last-child) {
+    margin-bottom: 0;
+  }
+  :global(.tex-description) {
+    margin: 0 0 1em;
+  }
+  :global(.tex-dt) {
+    font-weight: 600;
+    margin-top: 0.5em;
+  }
+  :global(.tex-dd) {
+    margin: 0.15em 0 0 1.5em;
+  }
+
+  :global(.tex-quote) {
+    margin: 1em 0 1em 0;
+    padding: 0.2em 1em;
+    border-left: 3px solid var(--app-paper-rule);
+    color: var(--app-ink-muted);
+    font-style: italic;
+  }
+  :global(.tex-center) {
+    text-align: center;
+  }
+
+  :global(.tex-figure) {
+    margin: 1.5em 0;
+    text-align: center;
+  }
+  :global(.tex-caption) {
+    margin-top: 0.5em;
+    font-size: 0.88rem;
+    color: var(--app-ink-muted);
+    text-align: left;
+  }
+  :global(.tex-caption-label) {
+    font-weight: 600;
+    color: var(--app-ink);
+  }
+
+  :global(.tex-table-wrap) {
+    overflow-x: auto;
+    margin: 1em 0;
+  }
+  :global(.tex-table) {
+    border-collapse: collapse;
+    margin: 0 auto;
+    font-size: 0.92rem;
+  }
+  :global(.tex-table td) {
+    border: 1px solid var(--app-paper-rule);
+    padding: 0.35em 0.75em;
+  }
+
+  :global(.tex-code),
+  :global(.tex-verbatim) {
+    display: block;
+    margin: 1em 0;
+    padding: 0.75em 1em;
+    background: var(--app-paper-tint);
+    border: 1px solid var(--app-paper-rule);
+    border-radius: 0.375rem;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    line-height: 1.5;
+    white-space: pre;
+    text-align: left;
+  }
+  :global(.tex-doc-root code) {
+    font-family: var(--font-mono);
+    font-size: 0.88em;
+    background: var(--app-paper-tint);
+    padding: 0.1em 0.3em;
+    border-radius: 0.25em;
+  }
+  :global(.tex-code code),
+  :global(.tex-verbatim code) {
+    background: transparent;
+    padding: 0;
+  }
+
+  :global(.tex-link) {
+    color: var(--app-paper-link);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  /* A dangerous link target (e.g. a non-http(s) scheme) that was refused a
+     real <a href>. This must read as MORE cautionary than a normal .tex-link,
+     not less — plain unstyled text would let a blocked link look plainer
+     (and so safer) than a working one. */
+  :global(.tex-link-blocked) {
+    color: var(--app-paper-flag);
+    text-decoration: underline dashed;
+    text-decoration-color: var(--app-paper-flag);
+    text-underline-offset: 2px;
+    cursor: not-allowed;
+  }
+  :global(.tex-link-blocked)::before {
+    content: '\26D4\FE0E\0020';
+    font-size: 0.85em;
+  }
+  :global(.tex-ref) {
+    color: var(--app-paper-link);
+    text-decoration: none;
+  }
+  :global(.tex-ref-pending) {
+    color: var(--app-paper-flag);
+  }
+  :global(.tex-cite) {
+    color: var(--app-paper-link);
+  }
+  :global(.tex-label-anchor) {
+    scroll-margin-top: 1rem;
+  }
+
+  :global(.tex-fn-rule) {
+    margin: 2.5em 0 1em;
+    border: none;
+    border-top: 1px solid var(--app-paper-rule);
+  }
+  :global(.tex-footnotes) {
+    font-size: 0.85rem;
+    color: var(--app-ink-muted);
+    padding-left: 1.4em;
+  }
+  :global(.tex-footnotes li) {
+    margin: 0.35em 0;
+  }
+  :global(.tex-fn-ref a),
+  :global(.tex-fn-back) {
+    color: var(--app-paper-link);
+    text-decoration: none;
+  }
+
+  :global(.tex-math-error) {
+    color: var(--app-paper-flag);
+    font-family: var(--font-mono);
+  }
+  :global(.tex-render-error) {
+    color: var(--app-paper-flag);
+    font-family: var(--font-mono);
+    white-space: pre-wrap;
+  }
+
+  :global(.tex-eqn-row) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1em;
+    margin: 0.2em 0;
+  }
+  :global(.tex-eqn-math) {
+    flex: 1;
+    overflow-x: auto;
+  }
+  :global(.tex-eqn-num) {
+    flex: 0 0 auto;
+    color: var(--app-ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  :global(.tex-doc-root .katex-display) {
+    margin: 0.6em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+</style>

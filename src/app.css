@@ -1,0 +1,258 @@
+@import "tailwindcss";
+
+/* Dark mode is driven by a `.dark` class on <html> rather than the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---- Latin Modern -------------------------------------------------------
+   The typeface pdflatex actually sets. Bundling it means the live preview
+   and the compiled PDF are the same document in the same face rather than
+   two different-looking renderings of it — the Live/PDF toggle becomes an
+   honest A/B. Subset to Latin-1 + typographic punctuation (116 KB total).
+   Latin Modern is (c) GUST e-foundry, GUST Font License — see
+   src/fonts/LICENSE-LatinModern.txt.                                      */
+@font-face {
+  font-family: 'Latin Modern Roman';
+  src: url('./fonts/lmroman10-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Latin Modern Roman';
+  src: url('./fonts/lmroman10-italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Latin Modern Roman';
+  src: url('./fonts/lmroman10-bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Latin Modern Roman';
+  src: url('./fonts/lmroman10-bolditalic.woff2') format('woff2');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Latin Modern Mono';
+  src: url('./fonts/lmmono10-regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ---- Theme tokens -------------------------------------------------------
+   One rule generates this palette. In prepress, marks that must not appear
+   in the final print are drawn in non-photo blue, which the camera does not
+   see. So: anything that is NOT the document — chrome, labels, gutters,
+   guides, the editor's markup — is drawn in non-repro blue on graphite.
+   The document itself is ink on paper, and stays ink on paper in both
+   themes, because a proofing tool should show the page as it will print.
+
+   Dark is the desk with the lamp off; light is a daylit drafting table.  */
+:root {
+  /* Desk */
+  --app-bg: #d9d5cc;
+  --app-surface: #e5e1d9;
+  --app-surface-alt: #cfcac0;
+  --app-border: #b9b3a7;
+  --app-border-strong: #9d9689;
+  --app-fg: #23211d;
+  --app-fg-muted: #575349;
+
+  /* Non-repro blue: the chrome's own colour, never the document's. */
+  --app-accent: #2c6e9b;
+  --app-accent-soft: #2c6e9b26;
+  --app-accent-fg: #ffffff;
+
+  /* Red lead — the colour of a proof correction. Errors only. */
+  --app-danger: #b23a22;
+  --app-ok: #3f6b45;
+
+  /* Paper is paper in both themes, so every colour that lands ON the page
+     is defined once here and never swapped by `.dark`. A proofing tool
+     should show the page as it will print. */
+  --app-paper: #f8f6f0;
+  --app-paper-edge: #00000014;
+  --app-ink: #16161a;
+  --app-ink-muted: #55565c;
+  --app-paper-rule: #d5d1c6;
+  --app-paper-tint: #f1eee5;
+  --app-paper-link: #2b5c86;
+  --app-paper-flag: #a8341c;
+
+  /* Editor: markup is annotation, so it lives in the non-repro family
+     plus a warm ochre for maths — four hues, no rainbow. */
+  --cm-latex-command: #1f5f88;
+  --cm-latex-env: #3d6b57;
+  --cm-latex-math: #8a5a1e;
+  --cm-latex-mathvar: #8a5a1e;
+  --cm-latex-comment: #655d50;
+  --cm-latex-brace: #8a8478;
+  --cm-latex-op: #a2492c;
+  --cm-latex-number: #3d6b57;
+  --cm-latex-heading: #23211d;
+  --cm-latex-escape: #a2492c;
+
+  --app-font-sans: 'Latin Modern Roman', 'Iowan Old Style', Georgia, serif;
+  --app-font-mono: 'Latin Modern Mono', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  --app-font-serif: 'Latin Modern Roman', Georgia, 'Palatino Linotype', serif;
+  --app-font-ui: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+.dark {
+  --app-bg: #0f1317;
+  --app-surface: #161b20;
+  --app-surface-alt: #12171b;
+  --app-border: #242c33;
+  --app-border-strong: #36434e;
+  --app-fg: #c6d4dd;
+  --app-fg-muted: #7d909e;
+
+  --app-accent: #8fc1e3;
+  --app-accent-soft: #8fc1e321;
+  --app-accent-fg: #0f1317;
+
+  --app-danger: #d2603f;
+  --app-ok: #6fae7d;
+
+  --cm-latex-command: #8fc1e3;
+  --cm-latex-env: #7fb8a0;
+  --cm-latex-math: #d6a765;
+  --cm-latex-mathvar: #d6a765;
+  --cm-latex-comment: #71879a;
+  --cm-latex-brace: #64798a;
+  --cm-latex-op: #d2836a;
+  --cm-latex-number: #7fb8a0;
+  --cm-latex-heading: #e2ecf3;
+  --cm-latex-escape: #d2836a;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--app-bg);
+  --color-surface: var(--app-surface);
+  --color-surface-alt: var(--app-surface-alt);
+  --color-edge: var(--app-border);
+  --color-edge-strong: var(--app-border-strong);
+  --color-fg: var(--app-fg);
+  --color-fg-muted: var(--app-fg-muted);
+  --color-accent: var(--app-accent);
+  --color-accent-soft: var(--app-accent-soft);
+  --color-accent-fg: var(--app-accent-fg);
+  --color-danger: var(--app-danger);
+  --color-ok: var(--app-ok);
+  --color-paper: var(--app-paper);
+  --color-ink: var(--app-ink);
+  --color-ink-muted: var(--app-ink-muted);
+  --font-sans: var(--app-font-sans);
+  --font-mono: var(--app-font-mono);
+  --font-serif: var(--app-font-serif);
+  --font-ui: var(--app-font-ui);
+}
+
+/* These belong in @layer base, not at the top level. An unlayered rule beats
+   every layered one no matter the order or specificity, so a bare
+   `button { background: none }` here silently defeats `bg-accent` on every
+   button in the app — which is exactly how the Compile button lost its
+   fill. Inside the layer, utilities win again. */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #app {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--app-bg);
+    color: var(--app-fg);
+    font-family: var(--app-font-ui);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  button,
+  select,
+  input,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  button {
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 1px solid var(--app-accent);
+    outline-offset: 2px;
+  }
+}
+
+/* ---- Chrome vocabulary --------------------------------------------------
+   Every label in the app chrome is set the same way: small, monospaced,
+   letterspaced, upper case. It reads as annotation beside the page rather
+   than as part of it.                                                     */
+@layer components {
+  .mark {
+    font-family: var(--app-font-ui);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Quiet scrollbars that stay in step with the theme, for the panels that
+   scroll internally. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--app-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--app-border-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--app-fg-muted);
+  background-clip: padding-box;
+}
