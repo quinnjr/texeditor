@@ -111,11 +111,15 @@ jobs:
 
       - run: pnpm test
       - run: pnpm exec svelte-check --threshold error
+      # Explicitly targeted: on the x86_64 macOS leg the host triple is
+      # aarch64 (macos-latest is Apple Silicon), so an untargeted build asks
+      # tauri-build for the aarch64 sidecar, which this job never fetched.
+      # Targeting also means the checks cover the triple actually being shipped.
       - name: Rust checks
         working-directory: src-tauri
         run: |
-          cargo test
-          cargo clippy --all-targets -- -D warnings
+          cargo test --target ${{ matrix.target }}
+          cargo clippy --target ${{ matrix.target }} --all-targets -- -D warnings
 
       # Flathub's org.flatpak.Builder, not the distro flatpak-builder: 22.04's
       # is old enough to invoke `appstream-compose`, which current SDKs no
@@ -135,15 +139,16 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Both are optional. Without them macOS builds are unsigned and
-          # unnotarised, and users must right-click -> Open on first launch;
-          # the build still succeeds.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # No APPLE_* signing variables here on purpose. An unset secret
+          # expands to the empty string rather than being absent, and Tauri
+          # treats a defined-but-empty APPLE_CERTIFICATE as "signing requested":
+          # it ran `security import` on an empty certificate and failed the
+          # bundle step after a clean four-minute build. macOS artifacts are
+          # therefore unsigned and unnotarised, and users must right-click ->
+          # Open on first launch (README says so).
+          #
+          # To enable signing later, add the secrets AND re-add the env keys in
+          # the same commit - adding the keys alone reintroduces this failure.
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
           releaseName: 'TeX Viewer __VERSION__'

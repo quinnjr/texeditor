@@ -63,15 +63,42 @@ jobs:
           cargo test
           cargo clippy --all-targets -- -D warnings
 
-      # The macOS leg of the release has failed on dead code that only exists
-      # off Linux. Checking that target here catches it on the PR instead of
-      # after a tag is pushed.
-      - name: Rust checks (macOS target)
-        working-directory: src-tauri
-        run: |
-          rustup target add x86_64-apple-darwin
-          node ../scripts/fetch-tectonic.mjs --target x86_64-apple-darwin
-          cargo clippy --target x86_64-apple-darwin --all-targets -- -D warnings
-
       - name: Shell scripts parse
         run: bash -n scripts/build-flatpak.sh
+
+  # A real macOS runner, not a cross-check from Linux: objc2's build script
+  # needs a compiler that accepts `-arch`, so `cargo clippy --target
+  # *-apple-darwin` on ubuntu fails in a way that says nothing about the code.
+  # This job exists because the macOS release leg has now broken twice on
+  # problems no Linux job can see - dead code that only exists off Linux, and
+  # a host/target triple mismatch.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The host triple, because these checks are untargeted - the same
+      # mismatch that broke the release's x86_64 leg.
+      - name: Fetch bundled Tectonic engine
+        run: node scripts/fetch-tectonic.mjs
+
+      - name: Rust checks
+        working-directory: src-tauri
+        run: |
+          cargo test
+          cargo clippy --all-targets -- -D warnings
